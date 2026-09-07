@@ -132,6 +132,32 @@ def render(data_rows, flist, bt3, bt4_eq, bt4_iv, cur, tgt, track, tsum):
             "track_nav": [round(float(v), 4) for v in track["nav"]],
         }
 
+    # 候选模型信号表（2026-09-07 裁决队列：PROD_HFA > EQ3 > PROD_HF）
+    from quantlab.decision.tracker import paper_nav_multi
+    cand_rows = []
+    for model in ("PROD_HFA", "EQ3_HFA_ICW", "EQ3", "PROD_HF"):
+        c = paper_nav_multi(model)
+        if c.empty:
+            cand_rows.append(
+                f"<tr><td>{model}</td><td>积累中（快照不足 2 期）</td>"
+                f"<td>—</td><td>—</td></tr>")
+            continue
+        cum = float((1 + c["ret"]).prod() - 1)
+        j = c.merge(track[["date", "ret"]], on="date", suffixes=("", "_p"))
+        rel = ((1 + j["ret"]).prod() - (1 + j["ret_p"]).prod()
+               if not j.empty else float("nan"))
+        cand_rows.append(
+            f"<tr><td>{model}</td><td>{len(c)} 日</td>"
+            f"<td>{cum:+.2%}</td>"
+            f"<td>{rel:+.2%}</td></tr>")
+    cand_section = (
+        '<h2>七、候选模型每日信号（2026-12 双闸门裁决队列）</h2>'
+        '<p class="sub">每日流水线决策步骤并行记账的纸面台账（信号计算与生产同链路），'
+        '满 60 交易日后按双闸门裁决是否替换现役 PROD。</p>'
+        '<table><thead><tr><th>模型</th><th>纸面天数</th><th>累计收益</th>'
+        '<th>相对生产</th></tr></thead><tbody>'
+        + "".join(cand_rows) + "</tbody></table>")
+
     return TMPL.format(
         n_factors=len(flist), n_holdings=len(tgt),
         data_tr=data_tr, flist_tr=flist_tr,
@@ -142,6 +168,7 @@ def render(data_rows, flist, bt3, bt4_eq, bt4_iv, cur, tgt, track, tsum):
         bm_ann=f"{bm3['annual_return']:.1%}",
         cur_n=len(cur), tgt_n=len(tgt),
         top10_tr=top10_tr, track_section=track_section,
+        cand_section=cand_section,
         payload=json.dumps({**curve, **track_payload}, ensure_ascii=False))
 
 
@@ -231,6 +258,8 @@ padding:2px 10px;font-size:12px;color:#7fb2e5;margin-bottom:16px;}}
 </table>
 
 {track_section}
+
+{cand_section}
 
 <p class="note" style="margin-top:24px">本报告由 QuantLab 五层流水线自动生成（scripts/overview_report.py）。仅供研究，不构成投资建议。</p>
 </div>

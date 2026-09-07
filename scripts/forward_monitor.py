@@ -107,10 +107,12 @@ p{{color:#57606a;font-size:14px;line-height:1.8}}</style></head><body><div class
     stat_rows = "".join(f"<tr><td>{k}</td><td><b>{v}</b></td></tr>"
                         for k, v in rows.items())
 
-    # ── 候选模型对比（sue_i 切换裁决的前向证据；无快照/样本不足为正常态）──
+    # ── 候选模型对比（2026-09-07 生产模型重构定稿的裁决队列：
+    #    PROD_HFA 主候选（等权=收益型 / ICW=稳健型）> EQ3 > PROD_HF；
+    #    ≥60 交易日后按双闸门裁决，无快照/样本不足为正常态）──
     cand_notes = []
     cand_curves = {}
-    for model in ("PROD_SI", "V3_SI"):
+    for model in ("PROD_HFA", "EQ3_HFA_ICW", "EQ3", "PROD_HF"):
         c = paper_nav_multi(model)
         if c.empty:
             cand_notes.append(f"<tr><td>{model}</td><td>积累中（快照不足 2 期）</td></tr>")
@@ -130,7 +132,7 @@ p{{color:#57606a;font-size:14px;line-height:1.8}}</style></head><body><div class
     cand_html = ""
     if cand_notes:
         cand_html = ("<h2 style='font-size:16px'>候选模型纸面对比"
-                     "（sue_i 切换裁决证据，≥60 交易日再议）</h2>"
+                     "（2026-12 双闸门裁决队列，≥60 交易日再议）</h2>"
                      "<table><tbody>" + "".join(cand_notes) + "</tbody></table>")
 
     payload = json.dumps({

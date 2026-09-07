@@ -146,6 +146,17 @@ def run_decision():
             cand += "/PROD_HFA 已记账"
         except Exception as e:
             log.warning(f"PROD_HFA 记账失败（不影响生产）: {e}")
+        # ── EQ3_HFA_ICW 稳健仓（2026-09-07 第七轮：同因子 ICIR 加权，
+        #    67.9%/2.82/-17.0%，回撤最浅；裁决时与等权二选一）──
+        try:
+            icw = build_composite(
+                ["size", "amihud_20", "sue_i", "hf_amihud_20"],
+                universe="ashare_ex", method="ic_weighted")
+            record_signal_multi("EQ3_HFA_ICW", generate_target(icw),
+                                date=sig_date)
+            cand += "/EQ3_HFA_ICW 已记账"
+        except Exception as e:
+            log.warning(f"EQ3_HFA_ICW 记账失败（不影响生产）: {e}")
     except Exception as e:
         log.warning(f"候选模型记账失败（不影响生产）: {e}")
         cand = "候选模型记账跳过"
