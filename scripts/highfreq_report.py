@@ -23,6 +23,30 @@ from quantlab.config import REPORTS_DIR
 from quantlab.data.store import Store, query
 from quantlab.factor import factor_ic
 
+# ── 并行会话持写锁防护：强制只读连接（本脚本纯读）──────────────────
+_orig_store_new = Store.__new__
+
+def _patched_store_new(cls, readonly=False, wait_lock=True):
+    return _orig_store_new(cls, True, True)
+
+Store.__new__ = _patched_store_new
+
+
+def wait_db_lock(max_tries=90):
+    """入口锁探测：另一进程以写模式持有 data/quant.duckdb 时等待（60s x 90 次）。"""
+    import time
+    import duckdb
+    for i in range(max_tries):
+        try:
+            con = duckdb.connect("data/quant.duckdb", read_only=True)
+            con.close()
+            return
+        except Exception:
+            if i % 5 == 0:
+                print(f"[lock] 数据库被并行进程占用，等待中... ({i + 1}/{max_tries})")
+            time.sleep(60)
+    raise SystemExit("等待数据库锁超时（90 分钟），放弃")
+
 TRADING_DAYS = 252
 HORIZONS = [1, 5, 10, 20]
 
@@ -150,6 +174,8 @@ def layer_backtest(ret_df, dates_rt, store, name, horizon=20, n_q=5):
             "ls_ir": round(ls_ir, 2), "mono": round(float(mono), 3),
             "curve": [{"date": str(d.date()), "nav": round(float(v), 4)}
                       for d, v in ls_nav.items()],
+            "ls_daily": [round(float(v), 6)
+                         for v in (lr[n_q - 1] - lr[0]).fillna(0)],
             "layer_curves": {
                 f"Q{q + 1}": [{"date": str(d.date()), "nav": round(float(v), 4)}
                               for d, v in (1 + lr[q].fillna(0)).cumprod().items()]
@@ -209,10 +235,42 @@ def _compute(store):
             ic_tables[h].append({"factor": n, **ic_stats(n, h)})
     ic_dfs = {h: pd.DataFrame(v).set_index("factor") for h, v in ic_tables.items()}
 
-    # 2) 分层回测（日频盯市）
-    bt = {}
+    # 2) 分层回测（日频盯市）：1/5/20 日调仓三口径
+    bt, bt3 = {}, {1: {}, 5: {}, 20: {}}
     for n in HF_FACTORS:
-        bt[n] = layer_backtest(ret_df, dates_rt, store, n)
+        for h in (1, 5, 20):
+            r = layer_backtest(ret_df, dates_rt, store, n, horizon=h)
+            bt3[h][n] = r
+            if h == 20:
+                bt[n] = r
+
+    # 有效方向装配：多空线按对应 horizon 的 IC 符号取方向
+    # （IC 为负不代表差，|IC| 大即好；负 IC 因子取反向使用）
+    def _flip(curve, ls_daily, sign):
+        if sign >= 0:
+            return curve
+        nav, out = 1.0, []
+        for r, pt in zip(ls_daily, curve):
+            nav *= 1.0 + sign * r
+            out.append({"date": pt["date"], "nav": round(nav, 4)})
+        return out
+
+    t5 = ic_dfs[5]
+    order3 = list(t5.reindex(t5["icir"].abs().sort_values(ascending=False).index).index)
+    layers3 = []
+    for n in order3:
+        if not all(bt3[h].get(n) for h in (1, 5, 20)):
+            continue
+        entry = {"name": n, "ic": round(float(t5.loc[n, "ic"]), 4),
+                 "icir": round(float(t5.loc[n, "icir"]), 3), "h": {}}
+        for h in (1, 5, 20):
+            r = bt3[h][n]
+            s_h = float(ic_dfs[h].loc[n, "ic"])
+            sign = -1.0 if (np.isfinite(s_h) and s_h < 0) else 1.0
+            curves = {"LS": _flip(r["curve"], r["ls_daily"], sign)}
+            curves.update(r["layer_curves"])
+            entry["h"][str(h)] = {"dir": sign, "curves": curves}
+        layers3.append(entry)
 
     # 3) 分段（T+5 口径，主要评估 horizon）
     seg = {}
@@ -223,10 +281,11 @@ def _compute(store):
 
     # 4) 增值性
     cc = cross_corr(store, HF_FACTORS, BENCH_FACTORS)
-    return ic_dfs, bt, seg, cc, bench_curve
+    return ic_dfs, bt, bt3, seg, cc, bench_curve, layers3
 
 
 def main():
+    wait_db_lock()
     store = Store()
     today = pd.Timestamp.now().strftime("%Y-%m-%d")
     cache = REPORTS_DIR / "_hf_report_cache.pkl"
@@ -237,15 +296,16 @@ def main():
                 blob = pickle.load(f)
         except Exception:
             blob = None
-    if blob is not None and blob.get("day") == today:
+    if blob is not None and blob.get("ver") == 2 and blob.get("day") == today:
         print(f"命中当日计算缓存（{today}），跳过重算")
-        ic_dfs, bt, seg, cc, bench_curve = blob["data"]
+        ic_dfs, bt, bt3, seg, cc, bench_curve, layers3 = blob["data"]
     else:
-        ic_dfs, bt, seg, cc, bench_curve = _compute(store)
+        ic_dfs, bt, bt3, seg, cc, bench_curve, layers3 = _compute(store)
         try:
             with open(cache, "wb") as f:
-                pickle.dump({"day": today,
-                             "data": (ic_dfs, bt, seg, cc, bench_curve)}, f)
+                pickle.dump({"ver": 2, "day": today,
+                             "data": (ic_dfs, bt, bt3, seg, cc,
+                                      bench_curve, layers3)}, f)
             print(f"计算缓存已写入（{today}）")
         except Exception:
             pass
@@ -265,13 +325,13 @@ def main():
               f"corr={cc.get(n, float('nan')):+.2f}")
 
     # HTML 报告
-    html = render(ic_dfs, bt, seg, cc, HF_FACTORS, bench_curve)
+    html = render(ic_dfs, bt, seg, cc, HF_FACTORS, bench_curve, layers3)
     out = REPORTS_DIR / "highfreq_factor_report.html"
     out.write_text(html, encoding="utf-8")
     print(f"\n报告已生成: {out}")
 
 
-def render(ic_dfs, bt, seg, cc, names, bench_curve):
+def render(ic_dfs, bt, seg, cc, names, bench_curve, layers3):
     def ic_rows(df):
         return "".join(
             f"<tr><td><code>{i}</code></td><td>{r['n_days']}</td>"
@@ -313,14 +373,12 @@ def render(ic_dfs, bt, seg, cc, names, bench_curve):
         for n in order)
 
     curves = {n: bt[n]["curve"] for n in order[:6] if bt.get(n)}
-    layers = {n: {"LS": bt[n]["curve"], **bt[n]["layer_curves"]}
-              for n in order if bt.get(n)}
     payload = {
         "ls": [{"name": n, "v": round(bt[n]["ls_ann"] * 100, 1)}
                for n in order if bt.get(n)],
         "curves": curves,
-        "layers": layers,
         "bench": bench_curve,
+        "layers3": layers3,
     }
 
     return HTML_TMPL.format(
@@ -358,13 +416,16 @@ code{{font-family:ui-monospace,"SF Mono",Consolas,monospace;color:#7fb2e5;}}
 .chart{{width:100%;height:380px;margin:8px 0;}}
 .note{{color:var(--muted);font-size:12px;margin-top:8px;}}
 .grid2{{display:grid;grid-template-columns:1fr 1fr;gap:24px;}}
+.grid3{{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;}}
+.fhead{{margin:26px 0 6px;font-size:14px;}}
+.fhead .m{{color:var(--muted);font-size:12px;margin-left:10px;}}
 </style>
 </head>
 <body>
 <div class="wrap">
 <h1>高频因子评估报告</h1>
 <p class="sub">分钟数据（kline_1min）→ 日频特征宽表（minute_feat）→ 21 个高频低频化因子 ·
-RankIC / 分层 / 分段稳健性 / 增值性 / 每因子分层曲线 · 样本 2025-01 ~ 2026-09</p>
+RankIC / 分层 / 分段稳健性 / 增值性 / 每因子 1·5·20 日调仓分层曲线 · 样本 2025-01 ~ 2026-09</p>
 
 <h2>一、RankIC —— T+1</h2>
 <table><thead><tr><th>因子</th><th>天数</th><th>IC</th><th>ICIR</th><th>胜率</th></tr></thead>
@@ -385,7 +446,8 @@ RankIC / 分层 / 分段稳健性 / 增值性 / 每因子分层曲线 · 样本 
 <h2>五、分层回测（5 层 · 每 20 个交易日调仓 · 日频盯市）</h2>
 <p class="sub">Q1 低因子值 → Q5 高因子值；层内等权，持有期内逐日盯市（成分股日收益均值，
 年化基数 252）；多空 = Q5−Q1；25'/26' = 分年多空年化；基准 = 全市场等权。
-<strong>有效多空年化</strong> = 按 T+5 IC 方向取用的多空（IC&lt;0 的因子取反向），衡量因子实际可用强度。</p>
+<strong>有效多空年化</strong> = 按 T+5 IC 方向取用的多空（IC&lt;0 的因子取反向）。
+IC 为负不代表差——方向仅决定取用朝向，强弱看 |IC| 与 |ICIR|。</p>
 <table><thead><tr><th>因子</th><th>Q1</th><th>Q2</th><th>Q3</th><th>Q4</th><th>Q5</th>
 <th>多空年化</th><th>多空IR</th><th>单调性</th><th>25'/26'</th><th>有效多空年化</th></tr></thead>
 <tbody>{bt_rows}</tbody></table>
@@ -402,10 +464,12 @@ RankIC / 分层 / 分段稳健性 / 增值性 / 每因子分层曲线 · 样本 
 <div id="chartLs" class="chart"></div>
 <div id="chartNav" class="chart" style="height:420px"></div>
 
-<h2>八、分层回测曲线（每因子 · Q1-Q5 + 多空 + 基准）</h2>
-<p class="sub">日频盯市、每 20 个交易日调仓（与第五节一致）；Q1=低因子值 → Q5=高因子值；
-多空 = Q5−Q1（红=正、绿=负，A 股配色）；灰色虚线 = 全市场等权基准。</p>
-<div id="layers" class="grid2"></div>
+<h2>八、分层回测曲线（每因子 × 1/5/20 日调仓 · 有效方向）</h2>
+<p class="sub">日频盯市；多空线按对应 horizon 的 IC 符号取<strong>有效方向</strong>
+（IC&lt;0 的因子取反向使用，IC 为负不代表差，强弱看 |IC|/|ICIR|）；
+Q1=低因子值 → Q5=高因子值（raw 排序，反向因子的多头端为 Q1）；灰色虚线 = 全市场等权基准。
+1 日调仓图即逐日再平衡的经典分层净值。</p>
+<div id="layers"></div>
 
 <p class="note" style="margin-top:24px">数据：kline_1min（free-stockdb，2025-01-02 起）。
 IC 为日频截面 Spearman 秩相关；分层为等权、未计费用。仅供研究，不构成投资建议。</p>
@@ -443,38 +507,47 @@ const axis={{axisLine:{{lineStyle:{{color:gray}}}},axisLabel:{{color:'#9aa3b2'}}
 (function(){{
   const QC=['#85b7eb','#5d9dd8','#378add','#2472bd','#185fa5'];
   const wrap=document.getElementById('layers');
-  Object.keys(P.layers).sort((a,b)=>{{
-    const va=P.ls.find(x=>x.name===a), vb=P.ls.find(x=>x.name===b);
-    return (vb?vb.v:0)-(va?va.v:0);
-  }}).forEach((n,i)=>{{
-    const cs=P.layers[n];
-    const lsEnd=cs.LS.length?cs.LS[cs.LS.length-1].nav:1;
-    const lsColor=lsEnd>=1?red:green;
-    const div=document.createElement('div');
-    div.className='chart'; div.style.height='340px'; div.id='layer_'+i;
-    wrap.appendChild(div);
-    const entries=Object.keys(cs).map(k=>({{k,v:cs[k]}}));
-    if(P.bench) entries.push({{k:'BENCH',v:P.bench}});
-    const series=entries.map(({{k,v}})=>{{
-      const isB=k==='BENCH', isLS=k==='LS';
-      const color=isB?'#8a93a3':(isLS?lsColor:QC[+k[1]-1]);
-      return {{
-        name:isB?'基准':k, type:'line', smooth:true, symbol:'none',
-        lineStyle:isB?{{width:1.5,color:color,type:'dashed'}}
-                     :{{width:isLS?2.5:1.5,color:color}},
-        itemStyle:{{color:color}},
-        data:v.map(p=>[p.date,p.nav])
-      }};
-    }});
-    echarts.init(div).setOption({{
-      title:{{text:n,textStyle:{{color:'#e6e8ec',fontSize:13,fontWeight:500}},left:8,top:2}},
-      grid:{{left:52,right:16,top:34,bottom:30}},
-      tooltip:{{trigger:'axis',valueFormatter:v=>v.toFixed(3)}},
-      legend:{{textStyle:{{color:'#9aa3b2',fontSize:11}},top:2,right:8,itemWidth:14}},
-      xAxis:{{type:'time',...axis}},
-      yAxis:{{type:'value',...axis,scale:true,
-             axisLabel:{{color:'#9aa3b2',formatter:v=>v.toFixed(1)}}}},
-      series
+  const HL={{'1':'1日调仓','5':'5日调仓','20':'20日调仓'}};
+  P.layers3.forEach((f,i)=>{{
+    const hd=document.createElement('div');
+    hd.className='fhead';
+    const fs=v=>(v>=0?'+':'')+v.toFixed(4);
+    const fs3=v=>(v>=0?'+':'')+v.toFixed(3);
+    hd.innerHTML='<code>'+f.name+'</code><span class="m">T+5 IC '+fs(f.ic)+
+                 ' / ICIR '+fs3(f.icir)+'</span>';
+    wrap.appendChild(hd);
+    const g=document.createElement('div'); g.className='grid3'; wrap.appendChild(g);
+    ['1','5','20'].forEach(h=>{{
+      const hc=f.h[h], cs=hc.curves, dir=hc.dir;
+      const lsEnd=cs.LS.length?cs.LS[cs.LS.length-1].nav:1;
+      const lsColor=lsEnd>=1?red:green;
+      const div=document.createElement('div');
+      div.className='chart'; div.style.height='270px'; div.id='layer_'+i+'_'+h;
+      g.appendChild(div);
+      const entries=Object.keys(cs).map(k=>({{k,v:cs[k]}}));
+      if(P.bench) entries.push({{k:'BENCH',v:P.bench}});
+      const series=entries.map(({{k,v}})=>{{
+        const isB=k==='BENCH', isLS=k==='LS';
+        const color=isB?'#8a93a3':(isLS?lsColor:QC[+k[1]-1]);
+        return {{
+          name:isB?'基准':k, type:'line', smooth:true, symbol:'none',
+          lineStyle:isB?{{width:1.5,color:color,type:'dashed'}}
+                       :{{width:isLS?2.5:1.5,color:color}},
+          itemStyle:{{color:color}},
+          data:v.map(p=>[p.date,p.nav])
+        }};
+      }});
+      echarts.init(div).setOption({{
+        title:{{text:HL[h]+(dir<0?' · 反向':' · 正向'),
+               textStyle:{{color:'#e6e8ec',fontSize:12,fontWeight:500}},left:8,top:2}},
+        grid:{{left:48,right:12,top:30,bottom:26}},
+        tooltip:{{trigger:'axis',valueFormatter:v=>v.toFixed(3)}},
+        legend:{{textStyle:{{color:'#9aa3b2',fontSize:10}},top:2,right:6,itemWidth:12}},
+        xAxis:{{type:'time',...axis,axisLabel:{{color:'#9aa3b2',fontSize:10}}}},
+        yAxis:{{type:'value',...axis,scale:true,
+               axisLabel:{{color:'#9aa3b2',fontSize:10,formatter:v=>v.toFixed(1)}}}},
+        series
+      }});
     }});
   }});
 }})();
