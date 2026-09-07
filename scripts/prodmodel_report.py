@@ -49,6 +49,9 @@ def load_all():
         cp = OUT / "si_fast_curves.pkl"
         if cp.exists():
             d["sif_curves"] = pd.read_pickle(cp)
+    p = OUT / "capacity.json"
+    if p.exists():
+        d["cap"] = json.loads(p.read_text(encoding="utf-8"))
     return d
 
 
@@ -217,6 +220,7 @@ def main():
                                   for x in v["date"]],
                         "nav": [round(float(y), 4) for y in v["nav"]]}
                        for k, v in (d.get("sif_curves") or {}).items()],
+        "cap": d.get("cap"),
     }
 
     # 模板以 {{ }} 转义花括号（历史 .format 遗留）；先还原再注入 payload，
@@ -325,6 +329,7 @@ td:first-child,th:first-child{text-align:left;}
 
 <div id="siDeepSection"></div>
 <div id="siFastSection"></div>
+<div id="capSection"></div>
 
 <h2>九、生产接入建议</h2>
 <div class="concl" id="conclProd"></div>
@@ -663,6 +668,36 @@ const fmtS=v=>v==null?'-':String(v);
       lineStyle:{{width:2,color:PA[i%PA.length]}},
       data:s.dates.map((d,j)=>[d,s.nav[j]])}}))
   }});
+}})();
+
+// 容量与可成交性
+(function(){{
+  if(!P.cap)return;
+  const C_=P.cap, wrap=document.getElementById('capSection');
+  const ms=Object.keys(C_.capacity);
+  let h='<h2>八·补3 容量与可成交性压力测试</h2>';
+  h+='<p class="note">ADV 法：单股持仓 / 该股 20 日均成交额 ≤10% 为红线。'+
+     '冲击成本用平方根模型（10bp 基准滑点 × √(参与率/10%)）。'+
+     '年费用拖累 = 单边成本 × 2 × 年换手（EQ3/PROD_SI 年换手 ~7.4x，PROD/PROD_DUAL ~2.8-2.9x，来自回测实测）。</p>';
+  h+='<h3>F1 持仓流动性与容量（最新目标持仓）</h3><div class="tbl-scroll"><table id="capTbl1"></table></div>';
+  h+='<h3>F2 冲击成本调整后的年费用拖累（给定资金规模）</h3><div class="tbl-scroll"><table id="capTbl2"></table></div>';
+  h+='<h3>F3 披露季换手集中度（财报月 1/4/8/10 月 vs 其他月，名单更替率）</h3><div class="tbl-scroll"><table id="capTbl3"></table></div>';
+  wrap.innerHTML=h;
+  tbl('capTbl1',['模型','持仓数','ADV中位(亿)','ADV 10%分位(亿)','容量·5%线(亿)','容量·中位线(亿)'],
+    ms.map(m=>[m,C_.profiles[m].n,C_.profiles[m].adv_med_yi,C_.profiles[m].adv_p10_yi,
+      C_.capacity[m].cap_max_5pct_yi,C_.capacity[m].cap_max_median_yi]),
+    [fmtS,null,null,null,null,null]);
+  const aums=Object.keys(C_.impact[ms[0]]);
+  tbl('capTbl2',['模型',...aums.map(a=>a+'(单边bp/年拖累%)')],
+    ms.map(m=>[m,...aums.map(a=>C_.impact[m][a].per_side_bp+' / '+C_.impact[m][a].annual_drag_pct)]),
+    [fmtS,...aums.map(()=>fmtS)]);
+  const tms=Object.keys(C_.turnover_monthly);
+  tbl('capTbl3',['模型','披露月均换手','其他月均换手','相对抬升'],
+    tms.map(m=>{{
+      const t=C_.turnover_monthly[m];
+      const rel=(t.disclosure_months_mean/t.other_months_mean-1)*100;
+      return [m,fmtPct(t.disclosure_months_mean*100),fmtPct(t.other_months_mean*100),(rel>=0?'+':'')+rel.toFixed(0)+'%'];
+    }}),[fmtS,fmtPct,fmtPct,fmtS]);
 }})();
 
 // 生产建议
