@@ -106,6 +106,15 @@ def run_decision():
         record_signal_multi("PROD_SI", generate_target(prod_si), date=sig_date)
         record_signal_multi("V3_SI", generate_target(v3_si), date=sig_date)
         cand = "PROD_SI/V3_SI 已记账"
+        # ── PROD_DUAL 两块式观察仓（2026-09-07 生产模型重构立项）──
+        try:
+            from quantlab.model.pool_select import build_dual_score
+            dual = build_dual_score()
+            record_signal_multi("PROD_DUAL", generate_target(dual),
+                                date=sig_date)
+            cand += "/PROD_DUAL 已记账"
+        except Exception as e:
+            log.warning(f"PROD_DUAL 记账失败（不影响生产）: {e}")
     except Exception as e:
         log.warning(f"候选模型记账失败（不影响生产）: {e}")
         cand = "候选模型记账跳过"

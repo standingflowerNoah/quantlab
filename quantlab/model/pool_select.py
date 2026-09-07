@@ -58,3 +58,25 @@ def build_production_score(universe: str = "ashare_ex",
     """
     from . import build_composite
     return build_composite(["size", "amihud_20"], universe=universe)
+
+
+def build_dual_score(universe: str = "ashare_ex", w_sat: float = 0.1,
+                     sats: list[str] | None = None) -> pd.DataFrame:
+    """两块式候选模型（PROD_DUAL，观察仓）
+
+    (1-w)·rank(核心 size+amihud_20) + w·rank(卫星块)。
+    卫星块默认 [max_return_20, amount_std_20, ev_high_vol_20,
+    turnover_std_20]（2026-09-07 全池评估：与核心正交、ICIR 0.42-0.95）。
+    全期回测略逊纯核心（年化 35.4% vs 36.9%），但 IC 逐年更稳
+    （ICIR 0.47 vs 0.42）、2024 弱年收益更高——观察仓积累前向样本。
+    """
+    from . import build_composite
+    if sats is None:
+        sats = ["max_return_20", "amount_std_20", "ev_high_vol_20",
+                "turnover_std_20"]
+    rc = build_composite(["size", "amihud_20"], universe=universe)
+    rs = build_composite(sats, universe=universe)
+    m = rc.rename(columns={"score": "rc"}).merge(
+        rs.rename(columns={"score": "rs"}), on=["date", "code"], how="inner")
+    m["score"] = (1 - w_sat) * m["rc"] + w_sat * m["rs"]
+    return m[["date", "code", "score"]]
