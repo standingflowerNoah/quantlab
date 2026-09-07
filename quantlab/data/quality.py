@@ -1,0 +1,163 @@
+"""数据质量校验：完整性 / 新鲜度 / 合理性 / 一致性
+
+查询走 store.query() 三层降级（直连 → 只读 → Parquet 镜像），
+因此数据更新任务持写锁期间体检照常可跑（报告写入自动跳过）。
+"""
+from __future__ import annotations
+
+import random
+
+import pandas as pd
+
+from ..config import get_logger
+from .store import query
+
+log = get_logger(__name__)
+
+
+def check_all(sample: int = 30) -> pd.DataFrame:
+    """全量体检，返回问题清单并尽力写入 quality_report 表"""
+    issues = []
+
+    def add(domain, ctype, status, detail):
+        issues.append({"domain": domain, "check_type": ctype,
+                       "status": status, "detail": detail})
+        try:
+            from .store import Store
+            Store().add_quality(domain, ctype, status, detail)
+        except Exception:
+            pass          # 写锁被占时跳过报告落库（结果已返回调用方）
+
+    # ── 1. 完整性：覆盖度足够的最近交易日 + 新鲜度 ──────────────
+    try:
+        from . import calendar
+        from .instruments import all_codes
+        total = len(all_codes(st_only=False))
+        # 找覆盖度 >=90% 的最近交易日（避免个别补拉股票抬高 MAX(date)）
+        r = query(f"""
+            SELECT date, COUNT(DISTINCT code) AS n
+            FROM kline_daily
+            GROUP BY date
+            HAVING COUNT(DISTINCT code) >= {int(total * 0.9)}
+            ORDER BY date DESC LIMIT 1""")
+        if r.empty:
+            add("kline_daily", "completeness", "fail",
+                "无覆盖度足够的交易日，疑似更新中断")
+        else:
+            latest = r.iloc[0, 0]
+            n = int(r.iloc[0, 1])
+            ratio = n / total if total else 0
+            last = calendar.last_trading_day()
+            lag = (pd.Timestamp(last).normalize()
+                   - pd.Timestamp(latest).normalize()).days
+            add("kline_daily", "completeness", "pass",
+                f"最新交易日({latest.date()})K线覆盖 {n}/{total} ({ratio:.1%})")
+            # 新鲜度：落后日历天数（早盘前跑时滞后 1 天属正常）
+            if lag > 2:
+                add("kline_daily", "freshness", "fail",
+                    f"K线最新 {latest.date()} 落后日历 {lag} 天")
+    except Exception as e:
+        add("kline_daily", "completeness", "fail", f"检查异常: {e}")
+
+    # ── 2. 新鲜度：各域水位 ──────────────────────────────────────
+    # 披露终止特判：北向净买入自 2024-08-16 起交易所停止披露（机制性断供），
+    # 水位停在该日属正常，不按"日频落后"判 FAIL
+    DISCLOSURE_END = {"northbound_daily": pd.Timestamp("2024-08-15")}
+    wm = query("""
+        SELECT w.domain, w.partition, w.watermark, w.updated_at,
+               d.frequency, d.source
+        FROM watermarks w LEFT JOIN datasets d USING(domain)
+        ORDER BY w.domain""")
+    daily_domains = {"kline_daily", "daily_snapshot", "dragon_tiger",
+                     "hot_topic", "northbound_daily", "margin_total",
+                     "block_trade", "index_kline"}
+    for _, w in wm.iterrows():
+        d = w["domain"]
+        if w["watermark"] is None:
+            continue
+        days = (pd.Timestamp.now().normalize()
+                - pd.Timestamp(w["watermark"]).normalize()).days
+        if d in DISCLOSURE_END:
+            end = DISCLOSURE_END[d]
+            if pd.Timestamp(w["watermark"]).normalize() <= end:
+                add(d, "freshness", "pass",
+                    f"披露止于 {end.date()}（交易所停止披露，机制性断供）")
+                continue
+        if d in daily_domains and days > 4:
+            add(d, "freshness", "fail",
+                f"日频域水位落后 {days} 天（{w['watermark']}）")
+        elif d == "finance_snapshot" and days > 14:
+            add(d, "freshness", "warn", f"财务快照 {days} 天未更新")
+        elif d == "fund_flow_daily" and days > 3:
+            add(d, "freshness", "warn",
+                f"资金流 {days} 天未更新（push2his 网络问题时为已知状态）")
+
+    # ── 3. 合理性：K线数值边界 ───────────────────────────────────
+    try:
+        bad = query("""
+            SELECT COUNT(*) AS n FROM kline_daily
+            WHERE date >= (SELECT MAX(date) - INTERVAL 7 DAY FROM kline_daily)
+              AND (close <= 0 OR high < low OR vol < 0)""")
+        n_bad = int(bad.iloc[0, 0])
+        if n_bad > 0:
+            add("kline_daily", "validity", "warn", f"近7日 {n_bad} 行异常K线")
+        else:
+            add("kline_daily", "validity", "pass", "近7日K线数值正常")
+    except Exception as e:
+        add("kline_daily", "validity", "fail", f"检查异常: {e}")
+
+    # ── 4. 一致性：K线收盘 vs 腾讯实时快照（抽样，注意非交易时段） ──
+    try:
+        codes = query("""
+            SELECT code FROM kline_daily
+            WHERE date = (SELECT MAX(date) FROM kline_daily)
+            ORDER BY RANDOM() LIMIT ?""", [sample])["code"].tolist()
+        if codes:
+            from .sources import tencent_source as tx
+            snap = tx.batch_quotes(codes)
+            latest = query("""
+                SELECT code, close FROM kline_daily
+                WHERE date = (SELECT MAX(date) FROM kline_daily)""", )
+            latest = latest[latest["code"].isin(codes)]
+            m = latest.merge(snap[["code", "price"]], on="code")
+            m["err"] = ((m["close"] - m["price"]) / m["price"]).abs()
+            # 收盘价与最新价在非交易时段应基本一致（容忍当日波动 2%）
+            n_big = int((m["err"] > 0.02).sum())
+            if n_big <= sample * 0.1:
+                add("kline_daily", "consistency", "pass",
+                    f"抽样 {len(m)} 只收盘价 vs 腾讯行情一致（>{2:.0%}偏差 {n_big} 只，含盘中波动）")
+            else:
+                add("kline_daily", "consistency", "warn",
+                    f"抽样 {len(m)} 只中 {n_big} 只收盘价偏差>2%")
+    except Exception as e:
+        add("kline_daily", "consistency", "fail", f"检查异常: {e}")
+
+    # ── 5. 复权因子抽样校验 ──────────────────────────────────────
+    try:
+        from .kline import verify_adj_factor
+        codes = query("""
+            SELECT DISTINCT code FROM dividend_events
+            ORDER BY RANDOM() LIMIT 3""")["code"].tolist()
+        n_bad = 0
+        for c in codes:
+            v = verify_adj_factor(c)
+            if v["status"] != "ok":
+                n_bad += 1
+                add("kline_daily", "validity", "warn",
+                    f"复权因子校验 {c}: {v.get('issues')}")
+        if n_bad == 0 and codes:
+            add("kline_daily", "validity", "pass",
+                f"复权因子抽样 {len(codes)} 只全部通过")
+    except Exception as e:
+        add("kline_daily", "validity", "fail", f"复权校验异常: {e}")
+
+    return pd.DataFrame(issues)
+
+
+def summary() -> pd.DataFrame:
+    """最近一次体检结果摘要（只读降级）"""
+    return query("""
+        SELECT domain, check_type, status, detail, checked_at
+        FROM quality_report
+        WHERE checked_at = (SELECT MAX(checked_at) FROM quality_report)
+        ORDER BY status, domain""")

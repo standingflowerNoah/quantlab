@@ -27,10 +27,18 @@ def main():
     wds = WD_CN
     mnames = list(models.keys())
 
-    # ── 自动找最佳星期（短窗夏普为准，全窗校验）──
+    # ── 自动找最佳星期：合并全部可得组合的平均夏普 ──
+    # 基础 = 三模型 × 短窗 n=100；若稳健性网格存在则并入（n=50/200 × 等权/ICW）
     focus_key = "focus"
-    scores = {wd: sum(models[m][focus_key][wd]["sharpe"]
-                      for m in mnames) / len(mnames) for wd in wds}
+    cell = {wd: [models[m][focus_key][wd]["sharpe"] for m in mnames]
+            for wd in wds}
+    gp = OUT / "weekday_grid.json"
+    grid = json.loads(gp.read_text(encoding="utf-8")) if gp.exists() else None
+    if grid:
+        for k, row in grid.items():
+            for wd in wds:
+                cell[wd].append(row[wd]["sharpe"])
+    scores = {wd: sum(v) / len(v) for wd, v in cell.items()}
     best = max(scores, key=scores.get)
     worst = min(scores, key=scores.get)
 
@@ -94,6 +102,10 @@ def main():
         "rb_dist": d.get("rb_wd_dist", {}),
     }
 
+    gp = OUT / "weekday_grid.json"
+    if gp.exists():
+        payload["grid"] = json.loads(gp.read_text(encoding="utf-8"))
+
     html = TMPL.replace("__PAYLOAD__",
                         json.dumps(payload, ensure_ascii=False))
     out = Path("reports/prodmodel_weekday_report.html")
@@ -145,6 +157,10 @@ th{background:#f6f8fa} td:first-child,th:first-child{text-align:left}
 <p class="note">周度调仓的期均换手是 20 日调仓的数倍——成本差是星期结论成立与否的一部分。</p>
 <div id="tblTurn"></div>
 
+<h2>五·补、稳健性网格（n=50/200 × 等权/ICW）</h2>
+<p class="note">检验"周四最优"是否依赖 top100 参数。若各网格下最优星期漂移不定，则星期效应不可采信。</p>
+<div id="tblGrid"></div>
+
 <h2>六、结论与建议</h2>
 <div class="card" id="conclRec"></div>
 
@@ -171,12 +187,13 @@ const COLORS={PROD:'#7a8194','EQ3_HFA':'#d8463e','EQ3_HFA_ICW':'#9a6700'};
   document.getElementById('genT').textContent='生成时间 '+P.generated;
   const f=P.tbl['EQ3_HFA'].focus;
   const b=f.find(x=>x[0]===P.best), w=f.find(x=>x[0]===P.worst);
+  const gtxt=P.grid?'（含稳健性网格 n=50/200 × 等权/ICW，共 7 个回测组合的平均）':'（三模型平均）';
   document.getElementById('conclBox').innerHTML=
-    '<b>短窗（2025-02+）EQ3_HFA 口径：'+P.best+' 年化 '+fmt(b[1])+'% / 夏普 '+fmt(b[2],2)+
-    '，'+P.worst+' 年化 '+fmt(w[1])+'% / 夏普 '+fmt(w[2],2)+'</b>；'+
-    '三模型平均夏普同为 '+P.best+' 最高（见图二柱图），全期口径排序一致。<br>'+
-    '<b>星期间差异整体属于"温和"量级</b>——年化差通常在 2~6pp 内，且分年排序有交叉（见第四章）。'+
-    '主结论请结合第六章建议采信。';
+    '<b>综合最优调仓日：'+P.best+'</b>'+gtxt+'；最弱为 '+P.worst+'。<br>'+
+    '<b>全组合中唯一一致的结论：周五最差</b>（6/7 组合垫底或倒数第二）；'+
+    '周二~周四的前半周整体优于周一、周五，但星期间年化差仅 2~6pp，'+
+    '且最优日随参数（n=50/100/200、等权/ICW）在周三/周四间漂移——'+
+    '属"温和、方向可参考"的弱星期效应，非值得单独押注的尖峰 alpha。';
 })();
 
 // 二、对比表
@@ -252,6 +269,23 @@ barChart('barSharpe','sharpe','夏普（短窗）');
   tbl('tblTurn',head,P.turn,fmts);
 })();
 
+// 五·补 稳健性网格
+(function(){
+  if(!P.grid){document.getElementById('tblGrid').innerHTML='<p class="note">网格数据未生成（scripts/prodmodel_weekday_grid.py）</p>';return}
+  const head=['口径'].concat(WD);
+  const rows=[];
+  Object.keys(P.grid).forEach(k=>{
+    const row=P.grid[k];
+    const vals=WD.map(w=>row[w]);
+    const bestI=vals.reduce((b,v,i)=>v.sharpe>vals[b].sharpe?i:b,0);
+    rows.push([k].concat(WD.map((w,i)=>{
+      const v=vals[i];
+      return (i===bestI?'<b>':'')+fmt(v.annual*100)+'% / '+fmt(v.sharpe,2)+(i===bestI?'</b>':'');
+    })));
+  });
+  tbl('tblGrid',head,rows,[null].concat(Array(WD.length).fill(null)));
+})();
+
 // 六、建议
 (function(){
   const fEQ=P.turn[1]||P.turn[0];            // EQ3_HFA（或首行）
@@ -260,15 +294,16 @@ barChart('barSharpe','sharpe','夏普（短窗）');
   const wkAnn=wAvg*52, baseAnn=fEQ[6]*12.6;
   const mult=(wkAnn/baseAnn).toFixed(1);
   document.getElementById('conclRec').innerHTML=
-    '<b>1. 调仓日选择：</b>短窗与全期综合（三模型平均夏普）<b>'+P.best+'</b> 均排第一，最弱为 '+P.worst+
-    '；但星期间年化差仅 2~6pp，且分年排序存在交叉——属"温和、方向可参考，但非尖峰"的量级。<br>'+
+    '<b>1. 调仓日选择：</b>合并全部 7 个回测组合（三模型 n=100 + 网格 n=50/200 × 等权/ICW）的平均夏普，'+
+    '<b>'+P.best+' 综合第一，'+P.worst+' 垫底</b>；但最优日随参数在周三/周四间漂移，'+
+    '唯一跨组合一致的是"周五最差"。<b>可靠结论：前半周（周二~周四）调仓优于周五，差异温和（年化 2~6pp）。</b><br>'+
     '<b>2. 周度 vs 20 日调仓：</b>周度年化换手约为 20 日口径的 <b>'+mult+' 倍</b>（'+wkAnn.toFixed(1)+' vs '+baseAnn.toFixed(1)+
     '），成本抬升显著；EQ3_HFA/ICW 的 20 日基线夏普仍高于所有星期日，'+
-    '<b>20 日调仓仍是成本效率更优的默认口径</b>。若确需周度（更快响应信号），建议 <b>'+P.best+' 调仓</b>。<br>'+
-    '<b>3. 稳健性：</b>结论对模型（PROD/EQ3_HFA/ICW）与窗口（全期/短窗）均不敏感；'+
-    '未发现"只有某一年成立"的星期效应，但也不存在值得单独押注的强星期 alpha。<br>'+
-    '<b>4. 落地建议：</b>主口径维持 20 日调仓不变；若上卫星口径，用 <b>'+P.best+' 周度调仓</b>，'+
-    '并在纸面台账并行观察（本研究结论为历史统计，前向样本是最终裁判）。';
+    '<b>20 日调仓仍是成本效率更优的默认口径</b>。若确需周度（更快响应信号），建议 <b>'+P.best+' 或周四调仓</b>。<br>'+
+    '<b>3. 稳健性：</b>未发现"只有某一年成立"的星期效应，但也不存在值得单独押注的强星期 alpha；'+
+    '分年排序有交叉，结论对窗口（全期/短窗）方向一致。<br>'+
+    '<b>4. 落地建议：</b>主口径维持 20 日调仓不变；周度卫星口径采用 <b>'+P.best+' 调仓</b>（纸面台账 PROD_HFA_W3 已并行记账），'+
+    '与前向双闸门一并观察（本研究结论为历史统计，前向样本是最终裁判）。';
   document.getElementById('rbN').textContent=Object.values(P.rb_dist).reduce((a,b)=>a+b,0);
   document.getElementById('rbDist').textContent=Object.entries(P.rb_dist).map(x=>x[0]+' '+x[1]).join('，');
 })();

@@ -1,5 +1,6 @@
 # ── 数据与运行时产物（体积大/每日可再生，不入库）──
-data/
+# 仅根目录数据湖；不带前导斜杠会连 quantlab/data/ 源码包一起忽略
+/data/
 logs/
 reports/
 portfolio_state/

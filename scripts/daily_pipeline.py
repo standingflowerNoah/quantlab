@@ -14,6 +14,8 @@ import time
 import argparse
 from pathlib import Path
 
+import pandas as pd
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from quantlab.config import get_logger
@@ -157,6 +159,34 @@ def run_decision():
             cand += "/EQ3_HFA_ICW 已记账"
         except Exception as e:
             log.warning(f"EQ3_HFA_ICW 记账失败（不影响生产）: {e}")
+        # ── PROD_HFA_W3 周三周度卫星（2026-09-07 第九轮：星期效应研究
+        #    周三 7 组合平均最优；快照固定记在"最近一个周三"，已记则跳过，
+        #    盯市按周推进）──
+        try:
+            from quantlab.data.store import Store as _S
+            _st = _S()
+            last_w3 = _st.q(
+                "SELECT max(date) AS d FROM signal_portfolio_multi "
+                "WHERE model='PROD_HFA_W3'")["d"][0]
+            sig_ts = pd.Timestamp(sig_date)
+            wed = sig_ts - pd.Timedelta(days=sig_ts.weekday() - 2)
+            if wed > sig_ts:          # 周四~周日：回退到本周前的周三
+                wed = wed - pd.Timedelta(days=7)
+            if last_w3 is None or pd.Timestamp(wed) > pd.Timestamp(last_w3):
+                w3 = build_composite(
+                    ["size", "amihud_20", "sue_i", "hf_amihud_20"],
+                    universe="ashare_ex")
+                d3 = w3[w3["date"] == wed]
+                if d3.empty:
+                    d3 = w3[w3["date"] == w3["date"].max()]
+                    wed = d3["date"].max()
+                record_signal_multi("PROD_HFA_W3",
+                                    generate_target(d3.copy()), date=wed)
+                cand += f"/PROD_HFA_W3 已记账({pd.Timestamp(wed).date()})"
+            else:
+                cand += "/W3 周三已记"
+        except Exception as e:
+            log.warning(f"PROD_HFA_W3 记账失败（不影响生产）: {e}")
     except Exception as e:
         log.warning(f"候选模型记账失败（不影响生产）: {e}")
         cand = "候选模型记账跳过"
