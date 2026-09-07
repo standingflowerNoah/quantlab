@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QuantLab · Agent 端量化研究系统架构设计 v1.0</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --border:#2d3748;
+    --text:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --accent2:#3fb950;
+    --gold:#d29922; --red:#f85149; --purple:#bc8cff; --cyan:#39c5cf;
+    --l1:#39c5cf; --l2:#58a6ff; --l3:#bc8cff; --l4:#d29922; --l5:#3fb950;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--text);font-family:"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif;line-height:1.7;padding:0 0 60px}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 28px}
+  header{background:linear-gradient(135deg,#161b22 0%,#1a2332 60%,#0f2027 100%);border-bottom:1px solid var(--border);padding:44px 0 34px;margin-bottom:32px}
+  h1{font-size:26px;letter-spacing:1px}
+  h1 .ver{color:var(--accent);font-size:14px;vertical-align:middle;margin-left:10px;border:1px solid var(--accent);padding:2px 10px;border-radius:12px}
+  .subtitle{color:var(--muted);margin-top:8px;font-size:14px}
+  h2{font-size:19px;margin:44px 0 6px;padding-left:12px;border-left:4px solid var(--accent)}
+  h2 .en{color:var(--muted);font-size:13px;font-weight:normal;margin-left:8px}
+  h3{font-size:15px;margin:24px 0 8px;color:var(--accent)}
+  p{margin:8px 0;color:#c9d1d9;font-size:14px}
+  .desc{color:var(--muted);font-size:13px}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:18px 20px;margin:14px 0}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}
+  th{background:var(--panel2);color:var(--accent);text-align:left;padding:8px 10px;border:1px solid var(--border);font-weight:600;white-space:nowrap}
+  td{padding:7px 10px;border:1px solid var(--border);color:#c9d1d9;vertical-align:top}
+  tr:hover td{background:#1a2230}
+  code{background:#22303f;color:var(--cyan);padding:1px 6px;border-radius:4px;font-family:"JetBrains Mono",Consolas,monospace;font-size:12.5px}
+  pre{background:#0a0e14;border:1px solid var(--border);border-radius:8px;padding:16px;overflow-x:auto;font-size:12.5px;line-height:1.6;margin:12px 0}
+  pre code{background:none;padding:0;color:#a5d6ff}
+  .tag{display:inline-block;padding:1px 10px;border-radius:10px;font-size:11.5px;margin:2px 3px 2px 0;white-space:nowrap}
+  .t-cyan{background:rgba(57,197,207,.15);color:var(--cyan);border:1px solid rgba(57,197,207,.4)}
+  .t-blue{background:rgba(88,166,255,.15);color:var(--accent);border:1px solid rgba(88,166,255,.4)}
+  .t-purple{background:rgba(188,140,255,.15);color:var(--purple);border:1px solid rgba(188,140,255,.4)}
+  .t-gold{background:rgba(210,153,34,.15);color:var(--gold);border:1px solid rgba(210,153,34,.4)}
+  .t-green{background:rgba(63,185,80,.15);color:var(--accent2);border:1px solid rgba(63,185,80,.4)}
+  .t-red{background:rgba(248,81,73,.15);color:var(--red);border:1px solid rgba(248,81,73,.4)}
+  .t-muted{background:rgba(139,148,158,.12);color:var(--muted);border:1px solid rgba(139,148,158,.35)}
+  .flow{display:flex;gap:8px;align-items:stretch;flex-wrap:wrap;margin:12px 0}
+  .flow .step{flex:1;min-width:130px;background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;text-align:center;position:relative}
+  .flow .step b{display:block;font-size:13px;color:var(--accent)}
+  .flow .step span{font-size:11.5px;color:var(--muted)}
+  .flow .arrow{display:flex;align-items:center;color:var(--muted);font-size:16px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+  @media(max-width:800px){.grid2,.grid3{grid-template-columns:1fr}}
+  .decision{background:linear-gradient(90deg,rgba(63,185,80,.08),transparent);border-left:3px solid var(--accent2)}
+  .pending{border-left:3px solid var(--gold)}
+  .archsvg{width:100%;height:auto;margin:10px 0}
+  .kbd{border:1px solid var(--border);border-bottom-width:2px;border-radius:4px;padding:0 5px;font-size:11px;color:var(--muted)}
+  .toc{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+  .toc a{color:var(--accent);text-decoration:none;font-size:12.5px;background:var(--panel);border:1px solid var(--border);padding:4px 12px;border-radius:14px}
+  .toc a:hover{background:var(--panel2)}
+  .note{background:rgba(88,166,255,.07);border:1px solid rgba(88,166,255,.25);border-radius:8px;padding:10px 14px;font-size:13px;color:#b6c8e0;margin:10px 0}
+  .warn{background:rgba(210,153,34,.07);border:1px solid rgba(210,153,34,.3);border-radius:8px;padding:10px 14px;font-size:13px;color:#e3c78a;margin:10px 0}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <h1>QuantLab <span class="ver">架构设计 v1.0</span></h1>
+    <div class="subtitle">Agent 端 A 股量化研究系统 · 数据 → 因子 → 模型 → 优化 → 决策 全链路 · 2026-09-01</div>
+    <div class="toc">
+      <a href="#decisions">已定决策</a><a href="#arch">总体架构</a><a href="#l1">L1 数据层</a>
+      <a href="#l2">L2 因子层</a><a href="#l3">L3 模型层</a><a href="#l4">L4 优化层</a>
+      <a href="#l5">L5 决策层</a><a href="#layout">目录与CLI</a><a href="#skills">Agent 技能</a>
+      <a href="#roadmap">实施路线</a><a href="#pending">待定决策</a>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+<!-- ══════════════ 已定决策 ══════════════ -->
+<h2 id="decisions">一、已定架构决策</h2>
+<div class="panel decision">
+<table>
+<tr><th style="width:130px">决策项</th><th>结论</th><th style="width:46%">理由</th></tr>
+<tr><td><b>运行形态</b></td><td>CodeBuddy 沙箱内运行（系统设计为可整体迁移）</td><td>数据随沙箱持久保留，agent 每次会话直接读写；纯 Python + 单目录 + DuckDB，随时可整体拷贝到服务器/本地机继续跑</td></tr>
+<tr><td><b>数据存储</b></td><td>DuckDB + Parquet 分层数据湖</td><td>零运维单文件分析型数据库，可直接 SQL 查询 Parquet，全市场 5000+ 股票多因子截面 join 性能强，agent 可直接用 SQL 做研究</td></tr>
+<tr><td><b>数据源策略</b></td><td>免费源为主（mootdx/腾讯/东财）+ iFinD 增强</td><td>免费源跑量、iFinD 补强独有数据（一致预期明细/分钟高频/行业指标），成本最低且互为冗余</td></tr>
+<tr><td><b>执行定位</b></td><td>模拟盘起步 + 实盘接口预留</td><td>本地撮合引擎完整跑通订单→成交→归因闭环；券商接口抽象为 <code>BrokerBase</code>，验证稳定后接入富途/QMT</td></tr>
+</table>
+</div>
+
+<!-- ══════════════ 总体架构 ══════════════ -->
+<h2 id="arch">二、总体架构 <span class="en">System Architecture</span></h2>
+<p class="desc">五层垂直架构，每层独立可用、逐层依赖；agent 通过 CLI 与 Skills 操作各层，所有中间产物落库落盘，研究过程可追溯、可复现。</p>
+
+<svg class="archsvg" viewBox="0 0 1000 560" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8b949e"/></marker>
+  </defs>
+  <!-- L5 -->
+  <g>
+    <rect x="20" y="14" width="960" height="88" rx="10" fill="rgba(63,185,80,.07)" stroke="#3fb950" stroke-width="1.2"/>
+    <text x="40" y="42" fill="#3fb950" font-size="16" font-weight="bold">L5 决策层 execution</text>
+    <text x="200" y="42" fill="#8b949e" font-size="11">纸面交易 / 实盘预留</text>
+    <g font-size="12.5" fill="#c9d1d9">
+      <rect x="40" y="56" width="212" height="34" rx="6" fill="#1c2330" stroke="#2d3748"/><text x="52" y="77">策略订单 · 信号→目标持仓→差异单</text>
+      <rect x="272" y="56" width="212" height="34" rx="6" fill="#1c2330" stroke="#2d3748"/><text x="284" y="77">拆单执行 · TWAP/ VWAP + 风控闸</text>
+      <rect x="504" y="56" width="212" height="34" rx="6" fill="#1c2330" stroke="#2d3748"/><text x="516" y="77">成交监控 · 滑点/部分成交/异常单</text>
+      <rect x="736" y="56" width="222" height="34" rx="6" fill="#1c2330" stroke="#2d3748"/><text x="748" y="77">绩效归因 · Brinson + 因子贡献分解</text>
+    </g>
+  </g>
+  <line x1="500" y1="106" x2="500" y2="120" stroke="#8b949e" stroke-width="1.5" marker-end="url(#ar)"/>
+  <!-- L4 -->
+  <g>
+    <rect x="20" y="124" width="960" height="88" rx="10" fill="rgba(210,153,34,.07)" stroke="#d29922" stroke-width="1.2"/>
+    <text x="40" y="152" fill="#d29922" font-size="16" font-weight="bold">L4 优化层 portfolio</text>
+    <text x="200" y="152" fill="#8b949e" font-size="11">组合构建与风险管理</text>
+    <g font-size="12.5" fill="#c9d1d9">
+      <rect x="40" y="166" width="300" height="34" rx="6" fill="#1c2330" stroke="#2d3748"/><text x="52" y="187">组合优化 · 约束求解(个股/行业/换手上限)</text>
+      <rect x="360" y="166" width="300" height="34" rx="6" fill="#1c2330" stroke="#2d3748"/><text x="372" y="187">风险扫描 · 回撤/VaR/集中度/压力测试</text>
+      <rect x="680" y="166" width="278" height="34" rx="6" fill="#1c2330" stroke="#2d3748"/><text x="692" y="187">持续监控 · 因子衰减/数据新鲜度告警</text>
+    </g>
+  </g>
+  <line x1="500" y1="216" x2="500" y2="230" stroke="#8b949e" stroke-width="1.5" marker-end="url(#ar)"/>
+  <!-- L3 -->
+  <g>
+    <rect x="20" y="234" width="960" height="88" rx="10" fill="rgba(188,140,255,.07)" stroke="#bc8cff" stroke-width="1.2"/>
+    <text x="40" y="262" fill="#bc8cff" font-size="16" font-weight="bold">L3 模型层 models</text>
+    <text x="170" y="262" fill="#8b949e" font-size="11">因子→收益预测</text>
+    <g font-size="12.5" fill="#c9d1d9">
+      <rect x="40" y="276" width="300" height="34" rx="6" fill="#1c2330" stroke="#2d3748"/><text x="52" y="297">模型设计 · 线性/GBDT/NN 三级火箭</text>
+      <rect x="360" y="276" width="300" height="34" rx="6" fill="#1c2330" stroke="#2d3748"/><text x="372" y="297">模型训练 · walk-forward 时序验证防未来</text>
+      <rect x="680" y="276" width="278" height="34" rx="6" fill="#1c2330" stroke="#2d3748"/><text x="692" y="297">模型评估 · IC衰减/分层/多空净值 → 注册</text>
+    </g>
+  </g>
+  <line x1="500" y1="326" x2="500" y2="340" stroke="#8b949e" stroke-width="1.5" marker-end="url(#ar)"/>
+  <!-- L2 -->
+  <g>
+    <rect x="20" y="344" width="960" height="88" rx="10" fill="rgba(88,166,255,.07)" stroke="#58a6ff" stroke-width="1.2"/>
+    <text x="40" y="372" fill="#58a6ff" font-size="16" font-weight="bold">L2 因子层 factors</text>
+    <text x="170" y="372" fill="#8b949e" font-size="11">AI 研究闭环</text>
+    <g font-size="12.5" fill="#c9d1d9">
+      <rect x="40" y="386" width="176" height="34" rx="6" fill="#1c2330" stroke="#2d3748"/><text x="52" y="407">AI 研究 · 读研报/数据扫描</text>
+      <rect x="232" y="386" width="176" height="34" rx="6" fill="#1c2330" stroke="#2d3748"/><text x="244" y="407">提出假设 · idea 登记评审</text>
+      <rect x="424" y="386" width="176" height="34" rx="6" fill="#1c2330" stroke="#2d3748"/><text x="436" y="407">开发实现 · 因子模板+单测</text>
+      <rect x="616" y="386" width="176" height="34" rx="6" fill="#1c2330" stroke="#2d3748"/><text x="628" y="407">因子分析 · IC/分层/换手</text>
+      <rect x="808" y="386" width="150" height="34" rx="6" fill="#1c2330" stroke="#2d3748"/><text x="820" y="407">构建入库 · 版本管理</text>
+    </g>
+  </g>
+  <line x1="500" y1="436" x2="500" y2="450" stroke="#8b949e" stroke-width="1.5" marker-end="url(#ar)"/>
+  <!-- L1 -->
+  <g>
+    <rect x="20" y="454" width="960" height="88" rx="10" fill="rgba(57,197,207,.07)" stroke="#39c5cf" stroke-width="1.2"/>
+    <text x="40" y="482" fill="#39c5cf" font-size="16" font-weight="bold">L1 数据层 data</text>
+    <text x="150" y="482" fill="#8b949e" font-size="11">一切的地基</text>
+    <g font-size="12.5" fill="#c9d1d9">
+      <rect x="40" y="496" width="228" height="34" rx="6" fill="#1c2330" stroke="#2d3748"/><text x="52" y="517">基础数据 · K线/财务/指数/行业/日历</text>
+      <rect x="288" y="496" width="228" height="34" rx="6" fill="#1c2330" stroke="#2d3748"/><text x="300" y="517">特色数据 · 龙虎榜/资金流/北向/解禁/题材</text>
+      <rect x="536" y="496" width="212" height="34" rx="6" fill="#1c2330" stroke="#2d3748"/><text x="548" y="517">数据更新 · 增量调度 + 断点续传</text>
+      <rect x="768" y="496" width="190" height="34" rx="6" fill="#1c2330" stroke="#2d3748"/><text x="780" y="517">数据存储 · 质量校验/血缘/字典</text>
+    </g>
+  </g>
+</svg>
+
+<div class="note"><b>Agent 端的含义：</b>系统的"操作员"是 AI agent（你我）。每一层都提供两类入口——<b>CLI 命令</b>（确定性执行，如 <code>ql data update</code>）和 <b>Agent Skill</b>（研究型流程，如因子研究闭环，AI 按 SKILL.md 中定义的标准流程自主调度工具、读写数据库、生成报告）。确定性计算全部下沉到 Python 库，AI 只负责"提出假设、调度流程、解读结果"，避免 LLM 直接算数带来的不可复现问题。</div>
+
+<!-- ══════════════ L1 数据层 ══════════════ -->
+<h2 id="l1">三、L1 数据层 <span class="en">基础数据 · 特色数据 · 更新 · 存储</span></h2>
+
+<h3>3.1 数据源路由矩阵</h3>
+<table>
+<tr><th>数据域</th><th>主源（免费）</th><th>增强源</th><th>频率</th><th>说明</th></tr>
+<tr><td>股票列表/行业分类</td><td>新浪列表+通达信财务</td><td>iFinD</td><td>周</td><td>含上市日期、总/流通股本、行业；push2 不可达改走新浪源</td></tr>
+<tr><td>交易日历</td><td>自维护（通达信沪深300 K线日期推断）</td><td>—</td><td>年</td><td>判断"今天是否交易日"是所有调度的前提</td></tr>
+<tr><td>日频 K 线（复权）</td><td>pytdx 直连（服务器池+故障转移）</td><td>—</td><td>日</td><td>复权因子自算（除权参考价法）单独存表，前复权在查询时计算</td></tr>
+<tr><td>分钟 K 线</td><td>pytdx（近月滚动）</td><td>iFinD L1 高频</td><td>按需</td><td>存储量大，仅回填研究窗口，不追全历史</td></tr>
+<tr><td>财务三表+快照</td><td>通达信财务 37 字段 + 新浪三表</td><td>iFinD</td><td>季</td><td>按报告期存储，查询时做 point-in-time 对齐（防未来函数）</td></tr>
+<tr><td>指数成分（300/500/1000/2000）</td><td>东财 datacenter 报表</td><td>—</td><td>周</td><td>push2 不可达，改走 datacenter-web（TYPE 字段区分指数）</td></tr>
+<tr><td>实时行情快照</td><td>腾讯（不封IP，PE/PB/市值/涨跌停）</td><td>iFinD</td><td>实时</td><td>盘后快照落库即成为当日截面数据</td></tr>
+<tr><td>龙虎榜/解禁/两融/大宗/股东户数/分红</td><td>东财 datacenter（内置限流）</td><td>—</td><td>日</td><td>东财独有，走统一 <code>em_get()</code> 串行限流入口</td></tr>
+<tr><td>个股/板块资金流</td><td>东财 push2his（当前沙箱不可达，探测恢复自动启用）</td><td>—</td><td>日</td><td>主力/超大单/大单/中单/小单净流入</td></tr>
+<tr><td>北向资金</td><td>同花顺 hsgt（本地自缓存积累）</td><td>iFinD</td><td>日</td><td>上游断供问题用本地 CSV 滚动累积对冲</td></tr>
+<tr><td>热点题材/强势股</td><td>同花顺热点（人工归因标签）</td><td>—</td><td>日</td><td>题材热度因子与 idea 生成的原料</td></tr>
+<tr><td>研报/一致预期</td><td>东财 reportapi + 同花顺一致预期</td><td>iFinD（明细）</td><td>日</td><td>AI 因子研究的主要输入之一</td></tr>
+<tr><td>公告/新闻</td><td>巨潮 + 东财新闻</td><td>iFinD 资讯</td><td>日</td><td>事件类因子的原料，先存元数据，全文按需拉取</td></tr>
+</table>
+
+<h3>3.2 存储分层设计（DuckDB + Parquet）</h3>
+<pre><code>data/
+├── quant.duckdb              # DuckDB 主库：元数据 + 热数据表 + 全部视图
+└── lake/                     # Parquet 数据湖（按域分目录，分区存文件）
+    ├── raw/                  # 原始层：接口返回原样落地（可重放，排障用）
+    │   ├── kline_daily/date=2026-09-01/
+    │   └── dragon_tiger/date=...
+    ├── clean/                # 清洗层：标准化 schema、去重、类型修正（研究主入口）
+    │   ├── kline_daily/      #   分区：year/ → code 列存
+    │   ├── financial/        #   报告期对齐后的财务宽表
+    │   ├── fund_flow/  northbound/  margin/  lockup/  hot_topic/ ...
+    │   └── instruments/      #   股票主表 + 行业映射
+    └── factor/               # 因子层：每个因子每日截面（L2 产出）
+        ├── f_mom_20d/
+        └── f_...</code></pre>
+<div class="grid2">
+<div class="panel">
+<b style="color:var(--cyan)">DuckDB 职责</b>
+<ul style="margin:8px 0 0 18px;font-size:13px;color:#c9d1d9">
+<li>元数据注册表：数据集清单、更新水位（watermark）、血缘、数据字典</li>
+<li>建 Parquet 外表视图：<code>CREATE VIEW kline AS SELECT * FROM read_parquet('lake/clean/kline_daily/**/*.parquet')</code>，SQL 直查湖</li>
+<li>热表：交易日历、股票主表、因子注册表、组合状态等小表直接入库</li>
+<li>agent 研究查询统一入口：一个 <code>.sql</code> 文件或一句 CLI 即可完成跨域 join</li>
+</ul>
+</div>
+<div class="panel">
+<b style="color:var(--cyan)">数据质量校验（quality.py）</b>
+<ul style="margin:8px 0 0 18px;font-size:13px;color:#c9d1d9">
+<li><b>完整性</b>：当日应到数据集的到齐率（如 K线应到 ~5400 只）</li>
+<li><b>新鲜度</b>：水位时间距今延迟（盘后 17:00 后日频数据应到位）</li>
+<li><b>合理性</b>：价格&gt;0、涨跌幅在停牌/涨跌停边界内、量额守恒抽查</li>
+<li><b>一致性</b>：腾讯 vs mootdx 收盘价交叉抽样对比</li>
+<li>校验结果写入 <code>quality_report</code> 表，异常项在 agent 会话开始时主动播报</li>
+</ul>
+</div>
+</div>
+
+<h3>3.3 数据更新机制</h3>
+<div class="flow">
+  <div class="step"><b>更新计划器</b><span>交易日历判断 → 生成当日任务清单</span></div>
+  <div class="arrow">→</div>
+  <div class="step"><b>增量采集</b><span>读水位 → 只拉缺口 → raw 落地</span></div>
+  <div class="arrow">→</div>
+  <div class="step"><b>清洗入湖</b><span>schema 标准化 → clean 层 parquet</span></div>
+  <div class="arrow">→</div>
+  <div class="step"><b>质量校验</b><span>四类校验 → 质量报告</span></div>
+  <div class="arrow">→</div>
+  <div class="step"><b>水位推进</b><span>记录 watermark → 断点可续传</span></div>
+</div>
+<p class="desc">触发方式：agent 会话内 CronCreate（每个交易日晚间自动跑 <code>ql data update</code>）+ 手动 <code>ql data update --domain kline</code> 单域补数。东财域任务自动串行限流，全量首建预计 2~4 小时（一次性），日常增量 10~20 分钟。</p>
+
+<!-- ══════════════ L2 因子层 ══════════════ -->
+<h2 id="l2">四、L2 因子层 <span class="en">AI 研究闭环 · 因子工程</span></h2>
+
+<h3>4.1 AI 因子研究闭环（本系统的灵魂）</h3>
+<div class="flow">
+  <div class="step"><b>① 研究</b><span>AI 读研报/热点/资金流异常，扫描数据规律</span></div>
+  <div class="arrow">→</div>
+  <div class="step"><b>② 假设</b><span>提出可量化假设 → ideas/ 登记（假设/逻辑/预期方向）</span></div>
+  <div class="arrow">→</div>
+  <div class="step"><b>③ 实现</b><span>按因子模板写 compute() + 单测 → 一次性跑通</span></div>
+  <div class="arrow">→</div>
+  <div class="step"><b>④ 分析</b><span>IC/IR/分层/换手/衰减/相关性 全自动报告</span></div>
+  <div class="arrow">→</div>
+  <div class="step"><b>⑤ 入库</b><span>达标→注册版本入库；不达标→归档记录原因</span></div>
+</div>
+<p class="desc">每个 idea 的生命周期状态机：<code>proposed → developing → testing → approved / rejected → decayed</code>，全程留痕在 <code>research/ideas/</code> 与因子注册表中——保证 AI 的每次"灵感"都可追溯、可复盘、不会重复劳动。</p>
+
+<h3>4.2 因子工程管道</h3>
+<table>
+<tr><th>环节</th><th>设计</th></tr>
+<tr><td><b>因子定义</b></td><td>每个因子一个 Python 模块，实现统一接口 <code>compute(universe, date) → DataFrame[date, code, value]</code>；声明式元信息（名称/分类/方向/依赖数据域/作者=AI会话ID/版本）</td></tr>
+<tr><td><b>预处理管道</b></td><td>可配置组合：缺失处理 → 去极值（MAD/3σ）→ 标准化（z-score/排名）→ 中性化（行业/市值/Barra风格）→ 因子正交化，每步参数存入注册表保证可复现</td></tr>
+<tr><td><b>分析套件</b></td><td>RankIC 均值/IR、IC 衰减曲线（1/5/10/20日）、分五组多空净值、换手率、覆盖度、与已入库因子的相关性矩阵（|ρ|&gt;0.7 标记冗余）</td></tr>
+<tr><td><b>入库标准</b></td><td>默认门槛（可调）：|RankIC|≥0.02 且 IR≥0.3、分层单调、10日IC半衰、换手可接受、与现有库相关性&lt;0.7</td></tr>
+<tr><td><b>首批因子库</b></td><td>动量族（20/60日、剔除近5日反转）、价值族（EP/BP/股息率TTM）、质量族（ROE/盈利增速/应计）、量价族（波动/换手/量价背离）、<b>特色族（主力资金净流入、龙虎榜机构净买、题材热度、北向偏好、融资情绪、解禁压力）——A 股特色数据是相对散户机构的 alpha 富矿</b></td></tr>
+</table>
+
+<!-- ══════════════ L3 模型层 ══════════════ -->
+<h2 id="l3">五、L3 模型层 <span class="en">模型设计 · 训练 · 评估</span></h2>
+<table>
+<tr><th>模块</th><th>设计</th></tr>
+<tr><td><b>样本构建</b></td><td><code>dataset.py</code>：X = 截面因子矩阵（point-in-time 对齐），y = 未来 N 日超额收益（相对中证全指，剔除涨跌停/停牌/ST 不可交易样本）；特征与标签的时间对齐由数据层 watermark 保证</td></tr>
+<tr><td><b>三级火箭</b></td><td>① 线性回归/Ridge（基准，可解释，系数即因子权重）② LightGBM（主力，捕捉非线性交互）③ 可选 NN（LSTM/Transformer，仅当前两级显著超额时启用，避免过拟合个人算力）</td></tr>
+<tr><td><b>训练协议</b></td><td>walk-forward 滚动训练：训练窗 4 年 → 验证 6 个月 → 滚动前进；每期超参与特征重要性归档；严防泄漏（中性化、行业均值等统计量只用训练窗内数据计算）</td></tr>
+<tr><td><b>评估标准</b></td><td>样本外 RankIC、IC 衰减、分组多空年化/夏普/回撤、分年度稳定性、与简单等权因子组合的增量贡献</td></tr>
+<tr><td><b>模型注册</b></td><td>模型文件 + 训练快照（数据版本/超参/评估指标）+ 上线状态（shadow/active/retired），L4/L5 只消费注册表中 active 模型</td></tr>
+</table>
+
+<!-- ══════════════ L4 优化层 ══════════════ -->
+<h2 id="l4">六、L4 优化层 <span class="en">组合优化 · 风险扫描 · 持续监控</span></h2>
+<table>
+<tr><th>模块</th><th>设计</th></tr>
+<tr><td><b>组合优化</b></td><td>输入 = 模型预测分 + 风险模型（对角+行业因子近似协方差）；求解器： scipy 凸优化，约束 = 个股上限（默认2%）、单行业上限（默认15%）、单日换手上限（默认30%）、持仓数量（30~80只可调）；输出 = 目标权重</td></tr>
+<tr><td><b>风险扫描</b></td><td>下单前强制闸门：组合历史回撤/VaR(95%)/波动率、个股集中度、行业集中度、beta 暴露、涨跌停/停牌不可成交标记、解禁日历冲突（持仓股未来30日解禁占比&gt;5% 告警）；<b>任何一项超阈值阻断订单并报告</b></td></tr>
+<tr><td><b>持续监控</b></td><td>因子层：入库因子 IC 滚动监测，连续 20 日 IC 衰减&gt;50% 触发降级评审；数据层：新鲜度告警；组合层：实际持仓与目标偏离度、实时净值回撤告警；监控报告每日生成，异常时 agent 主动上报</td></tr>
+</table>
+
+<!-- ══════════════ L5 决策层 ══════════════ -->
+<h2 id="l5">七、L5 决策层 <span class="en">订单 · 执行 · 归因</span></h2>
+<div class="flow">
+  <div class="step"><b>盘前</b><span>15:00后模型出分 → 优化器出目标权重 → 生成差异订单草稿</span></div>
+  <div class="arrow">→</div>
+  <div class="step"><b>风控闸</b><span>L4 风险扫描 → 人工确认开关（模拟期默认需确认）</span></div>
+  <div class="arrow">→</div>
+  <div class="step"><b>拆单执行</b><span>次日开盘 TWAP 分批 → 模拟撮合（VWAP±滑点）</span></div>
+  <div class="arrow">→</div>
+  <div class="step"><b>盘中监控</b><span>成交进度/滑点偏差/异常撤补</span></div>
+  <div class="arrow">→</div>
+  <div class="step"><b>盘后归因</b><span>Brinson行业归因+因子贡献+交易成本分析 → 日报</span></div>
+</div>
+<table>
+<tr><th>模块</th><th>设计</th></tr>
+<tr><td><b>模拟撮合引擎</b></td><td>以当日分钟K线（mootdx）为成交基础：限价单按可成交判断、市价单按 VWAP + 滑点模型（默认 10bp，按流动性市值分档）成交；费用模型 = 佣金万2.5 + 印花税卖出千1 + 冲击成本；涨跌停/停牌不可成交</td></tr>
+<tr><td><b>订单状态机</b></td><td><code>draft → risk_passed → submitted → partially_filled → filled / cancelled / rejected</code>，全状态落库，成交明细含时间/价格/量/费用</td></tr>
+<tr><td><b>实盘预留</b></td><td><code>BrokerBase</code> 抽象（submit/cancel/query_positions/query_balance/on_fill 回调）；后续按此实现 <code>BrokerFutu</code>（富途OpenAPI）/<code>BrokerQMT</code>（miniQMT），模拟撮合引擎本身就是其中一个 Broker 实现，切换零成本</td></tr>
+<tr><td><b>绩效归因</b></td><td>日/周/月绩效报告：Brinson 行业归因、因子暴露与贡献、交易成本归因（滑点损耗 vs 理论执行）、与基准（中证全指/中证500）对比</td></tr>
+</table>
+<div class="warn"><b>安全设计：</b>实盘接入前，所有订单默认<b>必须人工确认</b>（订单草稿 → 你回复确认 → 才提交）；资金相关操作留完整审计日志；模拟/实盘用不同的账户配置文件强隔离，杜绝误发。</div>
+
+<!-- ══════════════ 目录与 CLI ══════════════ -->
+<h2 id="layout">八、工程结构 <span class="en">目录 · CLI</span></h2>
+<pre><code>/workspace/quant/
+├── quantlab/                  # Python 核心库（L1~L5 各成子包，见上文）
+│   ├── config.py             #   路径/数据源参数/风控阈值 集中配置
+│   ├── data/  factors/  models/  portfolio/  execution/  reporting/
+├── cli.py                     # CLI 入口：python cli.py &lt;层&gt; &lt;命令&gt; [参数]
+├── skills/                    # Agent 技能（量化系统操作手册，见下节）
+├── data/                      # DuckDB + Parquet 数据湖（不入 git）
+├── research/ideas/            # AI 因子假设登记（markdown，含状态机字段）
+├── backtests/                 # 回测结果（参数指纹 + 净值 + 报告）
+├── portfolio_state/           # 模拟盘状态：持仓/订单/成交/净值曲线
+├── reports/                   # 因子报告/组合日报/归因报告（HTML/MD）
+├── logs/                      # 更新日志/交易日志/审计日志
+└── requirements.txt</code></pre>
+
+<h3>CLI 命令一览（agent 与你共用的确定性入口）</h3>
+<table>
+<tr><th>层</th><th>命令</th><th>作用</th></tr>
+<tr><td rowspan="5"><span class="tag t-cyan">L1 数据</span></td><td><code>ql data init</code></td><td>首建：股票主表 + 日历 + 全历史K线（一次性）</td></tr>
+<tr><td><code>ql data update [--domain kline|fund_flow|...]</code></td><td>增量更新（默认全部数据域）+ 水位推进</td></tr>
+<tr><td><code>ql data quality</code></td><td>数据体检报告（完整/新鲜/合理/一致）</td></tr>
+<tr><td><code>ql data backfill &lt;domain&gt; --from --to</code></td><td>历史缺口回补</td></tr>
+<tr><td><code>ql query "SELECT ..."</code></td><td>直接 SQL 查询数据湖（agent 研究主力）</td></tr>
+<tr><td rowspan="3"><span class="tag t-blue">L2 因子</span></td><td><code>ql factor list [--status]</code></td><td>因子注册表查询</td></tr>
+<tr><td><code>ql factor compute &lt;name&gt; --from --to</code></td><td>计算因子截面入湖</td></tr>
+<tr><td><code>ql factor analyze &lt;name&gt; [--neutralize industry,mcap]</code></td><td>全套分析报告（IC/分层/换手/相关）</td></tr>
+<tr><td rowspan="2"><span class="tag t-purple">L3 模型</span></td><td><code>ql model train &lt;config&gt;</code></td><td>walk-forward 训练 + 自动评估 + 注册</td></tr>
+<tr><td><code>ql model predict --date</code></td><td>active 模型出当日预测分</td></tr>
+<tr><td rowspan="2"><span class="tag t-gold">L4 优化</span></td><td><code>ql portfolio optimize --date</code></td><td>预测分 → 目标权重</td></tr>
+<tr><td><code>ql portfolio riskscan --date</code></td><td>风险扫描（组合级+订单级闸门）</td></tr>
+<tr><td rowspan="3"><span class="tag t-green">L5 决策</span></td><td><code>ql exec daily [--confirm]</code></td><td>一键日常：生成订单→风控→（确认后）模拟执行</td></tr>
+<tr><td><code>ql exec monitor</code></td><td>成交/滑点/持仓偏离监控</td></tr>
+<tr><td><code>ql exec attribution [--period 1m]</code></td><td>绩效归因报告</td></tr>
+</table>
+
+<!-- ══════════════ Skills ══════════════ -->
+<h2 id="skills">九、Agent 技能设计 <span class="en">AI 操作手册</span></h2>
+<p class="desc">技能 = 让 AI 按标准流程自主完成研究型任务的"操作规程"，内部调度 CLI 与 SQL，把自由发挥约束在流程框架内。</p>
+<table>
+<tr><th>技能</th><th>触发场景</th><th>AI 自主完成的事</th></tr>
+<tr><td><b>quant-data-ops</b><br><span class="desc">数据运维官</span></td><td>"更新数据 / 数据体检 / 补数"</td><td>判断交易日与数据域缺口 → 调度更新 → 校验质量 → 异常自动重试降级 → 输出运维简报</td></tr>
+<tr><td><b>quant-factor-lab</b><br><span class="desc">因子研究员</span></td><td>"研究一个XX因子 / 最近什么数据有alpha / 读研报找灵感"</td><td>数据扫描/研报阅读 → 登记idea → 写因子代码+单测 → 跑分析 → 达标入库/给出否决理由 → 生成研究备忘录</td></tr>
+<tr><td><b>quant-model-lab</b><br><span class="desc">模型工程师</span></td><td>"训练模型 / 评估模型 / 模型为何衰减"</td><td>组装数据集 → 训练协议执行 → 与基准对比 → 注册/shadow → 输出模型评估报告</td></tr>
+<tr><td><b>quant-portfolio</b><br><span class="desc">组合经理</span></td><td>"调仓 / 风险扫描 / 今天组合怎么样"</td><td>跑优化器 → 风险闸门 → 生成调仓建议单 → 持续监控解读</td></tr>
+<tr><td><b>quant-execution</b><br><span class="desc">交易员</span></td><td>"跑今日交易流程 / 出归因日报"</td><td>盘后流程编排（订单→风控→执行确认→监控）→ 盘后归因日报，实盘模式下严格执行人工确认</td></tr>
+</table>
+
+<!-- ══════════════ Roadmap ══════════════ -->
+<h2 id="roadmap">十、实施路线图 <span class="en">五个阶段，每阶段可独立验收</span></h2>
+<table>
+<tr><th style="width:90px">阶段</th><th>内容</th><th>验收标准</th></tr>
+<tr><td><b>P1 数据层</b><br><span class="desc">地基，先跑通</span></td><td>存储引擎 + 股票主表/日历 + 全历史日K + 财务快照 + 特色数据域逐个接入 + 更新调度 + 质量校验 + <code>ql query</code></td><td>一键首建全量数据；日常增量自动跑；SQL 能一次查出"全市场最近500日K线+行业+市值"截面</td></tr>
+<tr><td><b>P2 因子层</b><br><span class="desc">研究闭环上线</span></td><td>因子引擎+注册表+预处理管道+分析套件+首批 15~20 个因子（含特色数据因子）+ <code>quant-factor-lab</code> 技能</td><td>AI 能端到端完成一次"研报→假设→因子→分析→入库"闭环并产出报告</td></tr>
+<tr><td><b>P3 模型层</b></td><td>数据集构建 + Ridge/LGBM 训练协议 + 评估注册 + <code>quant-model-lab</code> 技能</td><td>walk-forward 样本外 IC 显著为正且跑赢等权因子组合</td></tr>
+<tr><td><b>P4 优化层</b></td><td>优化器 + 风险扫描闸门 + 监控告警 + <code>quant-portfolio</code> 技能</td><td>给定预测分输出合规目标权重；风险闸门能拦截超限订单</td></tr>
+<tr><td><b>P5 决策层</b></td><td>模拟撮合 + 订单状态机 + 拆单 + 归因 + <code>quant-execution</code> 技能</td><td>模拟盘连续运行：每日自动调仓→成交→归因日报闭环</td></tr>
+</table>
+<div class="note"><b>建议节奏：</b>P1→P2 是价值密度最高的两步（特色数据因子是 A 股 alpha 富矿，且不依赖模型即可做简单多空分层验证）。每个阶段完成后我会停下来给你演示验收，你确认后再进下一阶段。</div>
+
+<!-- ══════════════ Pending ══════════════ -->
+<h2 id="pending">十一、待定决策清单 <span class="en">按阶段逐步确认，不阻塞开工</span></h2>
+<div class="panel pending">
+<table>
+<tr><th>#</th><th>决策项</th><th>我的默认建议</th><th>需确认时点</th></tr>
+<tr><td>1</td><td><b>股票池范围</b></td><td>全市场（剔除 ST/*ST、上市&lt;120日次新、北交所单列开关）</td><td rowspan="4"><b>P1 开工前（下一轮对话）</b></td></tr>
+<tr><td>2</td><td><b>策略频率</b></td><td>日频为主（因子+调仓），分钟数据仅存近 60 日供执行模拟</td></tr>
+<tr><td>3</td><td><b>K线回补深度</b></td><td>日频 2018 年至今（约8年，覆盖一轮牛熊）</td></tr>
+<tr><td>4</td><td><b>iFinD 密钥</b></td><td>P1 先用免费源全量跑通；你提供密钥后再接增强层</td></tr>
+<tr><td>5</td><td>模拟盘初始资金</td><td>100 万</td><td rowspan="3">P4~P5 前</td></tr>
+<tr><td>6</td><td>基准指数</td><td>中证全指（等权视角另配中证2000）</td></tr>
+<tr><td>7</td><td>风控阈值</td><td>个股2%/行业15%/换手30%/回撤告警15%</td></tr>
+</table>
+</div>
+
+<p class="desc" style="margin-top:30px">—— QuantLab 架构设计 v1.0 · 2026-09-01 · 下一步：确认待定决策 1~4 项后，开工 P1 数据层。</p>
+</div>
+</body>
+</html>

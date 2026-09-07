@@ -1,0 +1,26 @@
+# ── 数据与运行时产物（体积大/每日可再生，不入库）──
+data/
+logs/
+reports/
+portfolio_state/
+.workbuddy/
+
+# ── 第三方工具链（free-stockdb，24GB 含镜像 zip，另行管理）──
+tools/
+
+# ── Python 运行时 ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# ── 数据库与缓存 ──
+*.duckdb
+*.duckdb.wal
+*.pkl
+
+# ── 编辑器/系统 ──
+.DS_Store
+Thumbs.db
