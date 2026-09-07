@@ -5,12 +5,13 @@
 
 评估内容：
 1. RankIC：T+1 / T+5 / T+10 / T+20（ICIR、胜率）
-2. 分层回测：5 分层、持有 20 日（多空年化、单调性）
+2. 分层回测：5 分层、每 20 个交易日调仓、持有期内逐日盯市（+ 等权基准）
 3. 稳健性：2025（样本内） vs 2026（准样本外）分段 IC
 4. 增值性：与既有日频代表因子的平均截面秩相关
 """
 import sys
 import json
+import pickle
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -19,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 from quantlab.config import REPORTS_DIR
-from quantlab.data.store import Store
+from quantlab.data.store import Store, query
 from quantlab.factor import factor_ic
 
 TRADING_DAYS = 252
@@ -57,50 +58,101 @@ def seg_ic(name, horizon):
     return a, b
 
 
-def layer_backtest(store, fwd, name, horizon=20, n_q=5):
+def daily_returns() -> pd.DataFrame:
+    """日频收益（date/code/ret）：ret = 当日复权收盘 / 昨日 - 1。
+
+    与 _fwd_return 同源同口径（kline_daily 视图 + close*adj_factor 前复权），
+    LAG 窗口函数替代 pandas shift；只取分层样本段（2024-12 下旬起）。
+    """
+    df = query("""
+        SELECT date, code, c / c_lag - 1 AS ret
+        FROM (
+            SELECT date, code, close * adj_factor AS c,
+                   LAG(close * adj_factor) OVER (
+                       PARTITION BY code ORDER BY date) AS c_lag
+            FROM kline_daily
+            WHERE date >= DATE '2024-12-20'
+        )
+        WHERE c_lag IS NOT NULL AND c > 0 AND c_lag > 0
+    """)
+    if df.empty:
+        return df
+    df["date"] = pd.to_datetime(df["date"])
+    return df[["date", "code", "ret"]].dropna()
+
+
+def layer_backtest(ret_df, dates_rt, store, name, horizon=20, n_q=5):
+    """分层日频回测：每 horizon 个交易日按因子值五等分重组，持有期内逐日盯市。
+
+    层内等权（当日收益 = 成分股日收益均值）；调仓日 = 因子截面日 [::horizon]；
+    调仓日 t 的持仓 accruing 于 t+1 .. t+horizon（与 fwd 口径一致，无前视）。
+    统计（年化/IR/分年）全部由日频收益推导，年化基数 252。
+    """
     fv = store.read_factor(name)
     if fv.empty:
         return None
     fv["date"] = pd.to_datetime(fv["date"])
     fv["value"] = pd.to_numeric(fv["value"], errors="coerce")
     fv = fv[np.isfinite(fv["value"])]
-    m = fv.merge(fwd, on=["date", "code"], how="inner")
-    if m.empty:
+    if fv.empty:
         return None
-    dates = np.sort(m["date"].unique())
-    m = m[m["date"].isin(dates[::horizon])]
 
-    def _qcut(x):
+    pos = {d: i for i, d in enumerate(dates_rt)}
+    fdates = pd.DatetimeIndex(np.sort(fv["date"].unique()))
+    rdates = fdates[::horizon]
+    by_date = {d: g for d, g in fv.groupby("date")}
+
+    parts = []
+    for t in rdates:
+        i0 = pos.get(t)
+        if i0 is None or i0 + 1 >= len(dates_rt):
+            continue
+        seg = dates_rt[i0 + 1: i0 + 1 + horizon]
+        cs = by_date[t]
         try:
-            return pd.qcut(x, n_q, labels=False, duplicates="drop")
+            q = pd.qcut(cs["value"], n_q, labels=False, duplicates="drop")
         except Exception:
-            return pd.Series(np.nan, index=x.index)
+            continue
+        if q.notna().sum() == 0:  # 截面全部并列等退化情形
+            continue
+        qmap = pd.Series(q.to_numpy(), index=cs["code"].to_numpy())
+        sub = ret_df.loc[seg[0]:seg[-1]]
+        if sub.empty:
+            continue
+        tmp = pd.DataFrame({"date": sub.index.to_numpy(),
+                            "q": sub["code"].map(qmap).to_numpy(),
+                            "ret": sub["ret"].to_numpy()})
+        tmp = tmp.dropna(subset=["q"])
+        if tmp.empty:
+            continue
+        tmp["q"] = tmp["q"].astype(int)
+        parts.append(tmp.groupby(["date", "q"])["ret"].mean().unstack()
+                     .reindex(columns=range(n_q)))
 
-    m["q"] = m.groupby("date")["value"].transform(_qcut)
-    m = m.dropna(subset=["q"])
-    m["q"] = m["q"].astype(int)
-    layer = m.groupby(["date", "q"])["fwd"].mean().unstack()
-    layer = layer.reindex(columns=range(n_q))
-    ppy = TRADING_DAYS / horizon
-    q_ann = [round(float((1 + layer[q].mean()) ** ppy - 1), 4)
-             for q in range(n_q)]
-    ls = (layer[n_q - 1] - layer[0]).dropna()
-    ls_ann = float((1 + ls.mean()) ** ppy - 1)
-    ls_ir = float(ls.mean() / ls.std() * np.sqrt(ppy)) if ls.std() > 0 else np.nan
-    nav = (1 + ls).cumprod()
-    curve = [{"date": str(d.date()), "nav": round(float(v), 4)}
-             for d, v in nav.items()]
+    if not parts:
+        return None
+    lr = pd.concat(parts).sort_index()  # 日频 × 层 收益矩阵
+    lr = lr[~lr.index.duplicated(keep="first")]
+
+    q_ann = [float((1 + lr[q].mean()) ** TRADING_DAYS - 1) for q in range(n_q)]
+    ls_d = (lr[n_q - 1] - lr[0]).dropna()
+    if ls_d.empty:
+        return None
+    ls_ann = float((1 + ls_d.mean()) ** TRADING_DAYS - 1)
+    ls_ir = (float(ls_d.mean() / ls_d.std() * np.sqrt(TRADING_DAYS))
+             if ls_d.std() > 0 else float("nan"))
     mono = pd.Series(q_ann).rank().corr(pd.Series(range(n_q)))
-    # 多空净值分年收益（稳健性）
-    yr = pd.Series(ls.values, index=pd.DatetimeIndex(ls.index).year)
-    yr_ann = yr.groupby(level=0).apply(
-        lambda s: float((1 + s).prod() ** (ppy / max(len(s), 1)) - 1))
-    return {"q_ann": q_ann, "ls_ann": round(ls_ann, 4),
+    yr_ann = ls_d.groupby(ls_d.index.year).apply(
+        lambda s: float((1 + s).prod() ** (TRADING_DAYS / max(len(s), 1)) - 1))
+    ls_nav = (1 + (lr[n_q - 1] - lr[0]).fillna(0)).cumprod()
+    return {"q_ann": [round(v, 4) for v in q_ann],
+            "ls_ann": round(ls_ann, 4),
             "ls_ir": round(ls_ir, 2), "mono": round(float(mono), 3),
-            "curve": curve,
+            "curve": [{"date": str(d.date()), "nav": round(float(v), 4)}
+                      for d, v in ls_nav.items()],
             "layer_curves": {
                 f"Q{q + 1}": [{"date": str(d.date()), "nav": round(float(v), 4)}
-                              for d, v in (1 + layer.fillna(0)).cumprod()[q].items()]
+                              for d, v in (1 + lr[q].fillna(0)).cumprod().items()]
                 for q in range(n_q)},
             "yr_ls": {int(k): round(v, 4) for k, v in yr_ann.items()}}
 
@@ -138,10 +190,17 @@ def cross_corr(store, names, bench):
     return out
 
 
-def main():
-    store = Store()
-    from quantlab.factor.quality import _fwd_return
-    fwd20 = _fwd_return(20)
+def _compute(store):
+    """全部重计算：IC 表 / 日频分层回测 / 分段稳健性 / 增值性 / 基准曲线。"""
+    # 0) 日频收益 + 等权基准（全市场逐日等权均值，累计净值）
+    ret_df = daily_returns().sort_values(["date", "code"]).set_index("date")
+    if ret_df.empty:
+        raise SystemExit("日频收益为空，检查 kline_daily 视图")
+    dates_rt = pd.DatetimeIndex(ret_df.index.unique())
+    bench_d = ret_df.groupby(level=0)["ret"].mean()
+    bench_d = bench_d[bench_d.index >= pd.Timestamp("2025-01-01")]
+    bench_curve = [{"date": str(d.date()), "nav": round(float(v), 4)}
+                   for d, v in (1 + bench_d).cumprod().items()]
 
     # 1) IC 表（多 horizon）
     ic_tables = {h: [] for h in HORIZONS}
@@ -150,10 +209,10 @@ def main():
             ic_tables[h].append({"factor": n, **ic_stats(n, h)})
     ic_dfs = {h: pd.DataFrame(v).set_index("factor") for h, v in ic_tables.items()}
 
-    # 2) 分层回测
+    # 2) 分层回测（日频盯市）
     bt = {}
     for n in HF_FACTORS:
-        bt[n] = layer_backtest(store, fwd20, n)
+        bt[n] = layer_backtest(ret_df, dates_rt, store, n)
 
     # 3) 分段（T+5 口径，主要评估 horizon）
     seg = {}
@@ -164,6 +223,32 @@ def main():
 
     # 4) 增值性
     cc = cross_corr(store, HF_FACTORS, BENCH_FACTORS)
+    return ic_dfs, bt, seg, cc, bench_curve
+
+
+def main():
+    store = Store()
+    today = pd.Timestamp.now().strftime("%Y-%m-%d")
+    cache = REPORTS_DIR / "_hf_report_cache.pkl"
+    blob = None
+    if cache.exists():
+        try:
+            with open(cache, "rb") as f:
+                blob = pickle.load(f)
+        except Exception:
+            blob = None
+    if blob is not None and blob.get("day") == today:
+        print(f"命中当日计算缓存（{today}），跳过重算")
+        ic_dfs, bt, seg, cc, bench_curve = blob["data"]
+    else:
+        ic_dfs, bt, seg, cc, bench_curve = _compute(store)
+        try:
+            with open(cache, "wb") as f:
+                pickle.dump({"day": today,
+                             "data": (ic_dfs, bt, seg, cc, bench_curve)}, f)
+            print(f"计算缓存已写入（{today}）")
+        except Exception:
+            pass
 
     # 控制台摘要
     t5 = ic_dfs[5]
@@ -180,13 +265,13 @@ def main():
               f"corr={cc.get(n, float('nan')):+.2f}")
 
     # HTML 报告
-    html = render(ic_dfs, bt, seg, cc, HF_FACTORS)
+    html = render(ic_dfs, bt, seg, cc, HF_FACTORS, bench_curve)
     out = REPORTS_DIR / "highfreq_factor_report.html"
     out.write_text(html, encoding="utf-8")
     print(f"\n报告已生成: {out}")
 
 
-def render(ic_dfs, bt, seg, cc, names):
+def render(ic_dfs, bt, seg, cc, names, bench_curve):
     def ic_rows(df):
         return "".join(
             f"<tr><td><code>{i}</code></td><td>{r['n_days']}</td>"
@@ -224,6 +309,7 @@ def render(ic_dfs, bt, seg, cc, names):
                for n in order if bt.get(n)],
         "curves": curves,
         "layers": layers,
+        "bench": bench_curve,
     }
 
     return HTML_TMPL.format(
@@ -285,8 +371,9 @@ RankIC / 分层 / 分段稳健性 / 增值性 / 每因子分层曲线 · 样本 
 <table><thead><tr><th>因子</th><th>天数</th><th>IC</th><th>ICIR</th><th>胜率</th></tr></thead>
 <tbody>{ic20_rows}</tbody></table>
 
-<h2>五、分层回测（5 层 · 持有 20 日）</h2>
-<p class="sub">Q1 低因子值 → Q5 高因子值；多空 = Q5−Q1 年化；25'/26' = 分年多空年化。</p>
+<h2>五、分层回测（5 层 · 每 20 个交易日调仓 · 日频盯市）</h2>
+<p class="sub">Q1 低因子值 → Q5 高因子值；层内等权，持有期内逐日盯市（成分股日收益均值，
+年化基数 252）；多空 = Q5−Q1；25'/26' = 分年多空年化。基准 = 全市场等权。</p>
 <table><thead><tr><th>因子</th><th>Q1</th><th>Q2</th><th>Q3</th><th>Q4</th><th>Q5</th>
 <th>多空年化</th><th>多空IR</th><th>单调性</th><th>25'/26'</th></tr></thead>
 <tbody>{bt_rows}</tbody></table>
@@ -303,9 +390,9 @@ RankIC / 分层 / 分段稳健性 / 增值性 / 每因子分层曲线 · 样本 
 <div id="chartLs" class="chart"></div>
 <div id="chartNav" class="chart" style="height:420px"></div>
 
-<h2>八、分层回测曲线（每因子 · Q1-Q5 + 多空）</h2>
-<p class="sub">每 20 个交易日调仓的离散口径（与第五节一致）；Q1=低因子值 → Q5=高因子值；
-多空 = Q5−Q1（红=正、绿=负，A 股配色）。曲线终点即各层累计净值。</p>
+<h2>八、分层回测曲线（每因子 · Q1-Q5 + 多空 + 基准）</h2>
+<p class="sub">日频盯市、每 20 个交易日调仓（与第五节一致）；Q1=低因子值 → Q5=高因子值；
+多空 = Q5−Q1（红=正、绿=负，A 股配色）；灰色虚线 = 全市场等权基准。</p>
 <div id="layers" class="grid2"></div>
 
 <p class="note" style="margin-top:24px">数据：kline_1min（free-stockdb，2025-01-02 起）。
@@ -354,12 +441,19 @@ const axis={{axisLine:{{lineStyle:{{color:gray}}}},axisLabel:{{color:'#9aa3b2'}}
     const div=document.createElement('div');
     div.className='chart'; div.style.height='340px'; div.id='layer_'+i;
     wrap.appendChild(div);
-    const series=Object.keys(cs).map(k=>({{
-      name:k,type:'line',smooth:true,symbol:'none',
-      lineStyle:{{width:k==='LS'?2.5:1.5,color:k==='LS'?lsColor:QC[+k[1]-1]}},
-      itemStyle:{{color:k==='LS'?lsColor:QC[+k[1]-1]}},
-      data:cs[k].map(p=>[p.date,p.nav])
-    }}));
+    const entries=Object.keys(cs).map(k=>({{k,v:cs[k]}}));
+    if(P.bench) entries.push({{k:'BENCH',v:P.bench}});
+    const series=entries.map(({{k,v}})=>{{
+      const isB=k==='BENCH', isLS=k==='LS';
+      const color=isB?'#8a93a3':(isLS?lsColor:QC[+k[1]-1]);
+      return {{
+        name:isB?'基准':k, type:'line', smooth:true, symbol:'none',
+        lineStyle:isB?{{width:1.5,color:color,type:'dashed'}}
+                     :{{width:isLS?2.5:1.5,color:color}},
+        itemStyle:{{color:color}},
+        data:v.map(p=>[p.date,p.nav])
+      }};
+    }});
     echarts.init(div).setOption({{
       title:{{text:n,textStyle:{{color:'#e6e8ec',fontSize:13,fontWeight:500}},left:8,top:2}},
       grid:{{left:52,right:16,top:34,bottom:30}},
