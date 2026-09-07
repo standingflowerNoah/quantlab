@@ -47,13 +47,16 @@ ttm = ev.groupby(["code", "snap_date"], as_index=False)["fenhong"].sum().rename(
 me = me.merge(ttm, on=["code", "date"], how="left")
 me["ttm_div"] = me["ttm_div"].fillna(0.0)
 me["dy"] = me["ttm_div"] / me["close"]
-me = me[me["close"] >= 2.0].copy()
-# 窗口内分红加回（简化：加回比例 = fenhong / snap0 close，分层排序不变）
-fwd_div = ev.merge(me[["code", "date"]], left_on=["code", "snap_date"], right_on=["code", "date"], how="inner")
-fwd_div = fwd_div.rename(columns={"date": "snap0"})
-fwd_sum = fwd_div.groupby(["code", "snap0"], as_index=False)["fenhong"].sum().rename(columns={"fenhong": "fwd_div"})
-me = me.merge(fwd_sum, left_on=["code", "date"], right_on=["code", "snap0"], how="left")
+# 前瞻窗口分红加回：ex_date ∈ (t, t_next]，加 fenhong/close_t（在 close>=2 过滤前建链，避免断链）
+sd = me[["code", "date"]].drop_duplicates().sort_values(["code", "date"])
+sd["next_snap"] = sd.groupby("code")["date"].shift(-1)
+ev_fwd = cash.merge(sd, left_on="code", right_on="code").rename(columns={"date_x": "ex_date", "date_y": "snap"})
+ev_fwd = ev_fwd[(ev_fwd["ex_date"] > ev_fwd["snap"]) & (ev_fwd["ex_date"] <= ev_fwd["next_snap"])]
+fwd_sum = ev_fwd.groupby(["code", "snap"], as_index=False)["fenhong"].sum().rename(
+    columns={"fenhong": "fwd_div", "snap": "date"})
+me = me.merge(fwd_sum, on=["code", "date"], how="left")
 me["fwd_div"] = me["fwd_div"].fillna(0.0)
+me = me[me["close"] >= 2.0].copy()
 me["fwd_ret"] = (me["fwd_close"] + me["fwd_div"]) / me["close"] - 1
 me = me.dropna(subset=["fwd_ret"])
 
