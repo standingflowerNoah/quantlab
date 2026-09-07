@@ -53,6 +53,41 @@ def run_quality():
     return f"{n_fail} 失败, {n_warn} 警告（数据健康）"
 
 
+@step("分钟特征")
+def run_minute_feat():
+    """分钟→日特征宽表增量重建：分钟湖有新日期而 minute_feat 未覆盖时，
+    自 since=宽表最新日期 起增量合并（含重叠日重算，幂等）。
+    hf 系因子依赖此宽表，不重建则 hf 因子永远滞后一天。"""
+    import duckdb
+    from quantlab import config
+    from quantlab.data.minute_feat import build_minute_feat, feat_max_date
+
+    feat_max = feat_max_date()
+    if feat_max is None:
+        return "minute_feat 为空，跳过增量（需先手动全量 data minute-feat）"
+    # 分钟湖最新日期：只扫最新年份分区，取 MAX(datetime)
+    yr_dirs = sorted(config.KLINE_1MIN_DIR.glob("year=*"))
+    if not yr_dirs:
+        return "分钟湖为空，跳过"
+    latest = yr_dirs[-1] / "part-*.parquet"
+    con = duckdb.connect()
+    try:
+        lake_max = con.execute(
+            f"SELECT max(CAST(datetime AS DATE)) AS d "
+            f"FROM read_parquet('{str(latest).replace(chr(92), '/')}')"
+        ).fetchone()[0]
+    finally:
+        con.close()
+    if lake_max is None:
+        return "分钟湖无数据，跳过"
+    lake_max = pd.Timestamp(lake_max)
+    if lake_max <= feat_max:
+        return f"minute_feat 已覆盖至 {feat_max.date()}，无需增量"
+    n = build_minute_feat(since=str(feat_max.date()))   # 重算 feat_max 当日（防半写）+ 增量日
+    return (f"增量重建完成：分钟湖至 {lake_max.date()}，"
+            f"{ {k: f'{v:,}行' for k, v in n.items()} }")
+
+
 @step("因子计算")
 def run_factor():
     from quantlab.factor import compute_all

@@ -47,12 +47,19 @@ FEAT_COLS = [
 ]
 
 
-def _glob_1min() -> str:
-    return str(config.KLINE_1MIN_DIR / "year=*" / "part-*.parquet").replace("\\", "/")
+def _glob_1min(min_year: int | None = None) -> str:
+    """read_parquet 第一参数表达式：全量=单 glob 字符串；增量=年份目录列表字面量"""
+    if min_year is None:
+        return f"'{str(config.KLINE_1MIN_DIR / 'year=*' / 'part-*.parquet').replace(chr(92), '/')}'"
+    dirs = sorted(config.KLINE_1MIN_DIR.glob("year=*"))
+    sel = [str(d / "part-*.parquet").replace("\\", "/")
+           for d in dirs if int(d.name.split("=")[1]) >= min_year]
+    return "[" + ", ".join(f"'{p}'" for p in sel) + "]"
 
 
-def _agg_sql(start: str | None = None, end: str | None = None) -> str:
-    """分钟→日聚合 SQL（可选日期过滤，date 为闭区间）"""
+def _agg_sql(start: str | None = None, end: str | None = None,
+             min_year: int | None = None) -> str:
+    """分钟→日聚合 SQL（可选日期过滤，date 为闭区间；min_year 裁剪扫描分区）"""
     flt = ""
     if start:
         flt += f" AND CAST(datetime AS DATE) >= DATE '{start}'"
@@ -66,7 +73,7 @@ WITH m AS (
            high, low, open, close, vol, amount,
            CASE WHEN close > 0 AND LAG(close) OVER w > 0
                 THEN LN(close / LAG(close) OVER w) END AS r
-    FROM read_parquet('{_glob_1min()}', hive_partitioning=false)
+    FROM read_parquet({_glob_1min(min_year)}, hive_partitioning=false)
     WHERE close > 0{flt}
     WINDOW w AS (PARTITION BY code, CAST(datetime AS DATE) ORDER BY datetime)
 ),
@@ -155,30 +162,61 @@ GROUP BY b.code, b.date, smq.sm_amt, smq.sm_vol,
 """
 
 
-def build_minute_feat(years: list[int] | None = None,
-                      replace: bool = True) -> dict:
-    """构建分钟日特征宽表（按年分块，整文件覆盖写）
+def _write_year(con, y: int, new_df: pd.DataFrame, keep_before: str | None) -> int:
+    """写入单年文件：keep_before 给定时保留旧文件中该日期之前的行（增量合并，
+    其余丢弃由 new_df 覆盖——重叠日期/股票以新算为准，天然幂等）"""
+    f = FEAT_DIR / f"part-{y}.parquet"
+    if f.exists() and keep_before:
+        old = pd.read_parquet(f, columns=FEAT_COLS)
+        old = old[old["date"] < pd.Timestamp(keep_before)]
+        new_df = pd.concat([old, new_df], ignore_index=True)
+    new_df = new_df.sort_values(["date", "code"]).reset_index(drop=True)
+    tmp = FEAT_DIR / f".part-{y}.parquet.tmp"
+    new_df.to_parquet(tmp, index=False, compression="zstd")
+    tmp.replace(f)
+    return len(new_df)
 
-    返回 {year: rows}。years=None 自动发现分钟湖全部年份。
+
+def build_minute_feat(years: list[int] | None = None,
+                      replace: bool = True,
+                      since: str | None = None) -> dict:
+    """构建分钟日特征宽表
+
+    - 全量模式：years=None 自动发现分钟湖全部年份，按年整文件覆盖（幂等）
+    - 增量模式（since='YYYY-MM-DD'）：只聚合 since 起的日期，与既有年份
+      文件合并覆盖（重叠行以新算为准），分钟湖只扫 since 所在年份及以后
+      的分区——供每日流水线使用，成本 ~ 单年扫描
+    返回 {year: rows}。
     """
     import duckdb
 
     if not config.KLINE_1MIN_DIR.exists():
         raise FileNotFoundError("分钟湖不存在，先运行 data minute-init")
-    ys = years or sorted(
-        int(p.name.split("=")[1]) for p in config.KLINE_1MIN_DIR.glob("year=*"))
     FEAT_DIR.mkdir(parents=True, exist_ok=True)
-
     out = {}
     con = duckdb.connect()          # 独立连接：不碰 quant.duckdb，无锁冲突
     try:
+        if since is not None:
+            min_year = int(since[:4])
+            df = con.execute(_agg_sql(start=since, min_year=min_year)).df()
+            if df.empty:
+                log.info(f"minute_feat 增量({since} 起): 无新数据")
+                return {}
+            df["date"] = pd.to_datetime(df["date"])
+            for y, g in df.groupby(df["date"].dt.year):
+                out[int(y)] = _write_year(con, int(y), g, keep_before=since)
+                log.info(f"minute_feat 增量 {y}: 合并后 {out[int(y)]:,} 行")
+            return out
+
+        ys = years or sorted(
+            int(p.name.split("=")[1]) for p in config.KLINE_1MIN_DIR.glob("year=*"))
         for y in ys:
             f = FEAT_DIR / f"part-{y}.parquet"
             if f.exists() and not replace:
                 log.info(f"minute_feat {y} 已存在，跳过")
                 continue
             t0 = time.time()
-            sql = _agg_sql(start=f"{y}-01-01", end=f"{y}-12-31")
+            sql = _agg_sql(start=f"{y}-01-01", end=f"{y}-12-31", min_year=y)
             df = con.execute(sql).df()
             if df.empty:
                 log.warning(f"minute_feat {y}: 无数据")
@@ -193,6 +231,14 @@ def build_minute_feat(years: list[int] | None = None,
     finally:
         con.close()
     return out
+
+
+def feat_max_date() -> pd.Timestamp | None:
+    """宽表最新覆盖日期（增量调度判断用）"""
+    st = feat_status()
+    if st.empty or "d_max" not in st.columns:
+        return None
+    return pd.Timestamp(st["d_max"].max())
 
 
 def ensure_view(store: Store | None = None):

@@ -92,7 +92,11 @@ def cmd_data(args: list[str]):
     elif sub == "minute-feat":
         from quantlab.data.minute_feat import (build_minute_feat, ensure_view,
                                                feat_status)
-        print("构建:", build_minute_feat())
+        since = None
+        for i, a in enumerate(rest):
+            if a == "--since" and i + 1 < len(rest):
+                since = rest[i + 1]
+        print("构建:", build_minute_feat(since=since))
         ensure_view()
         print(feat_status().to_string(index=False))
     elif sub == "minute-feat-status":

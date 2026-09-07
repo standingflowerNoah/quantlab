@@ -60,6 +60,8 @@ class _HfFactor(SqlFactor):
 
     def _sql(self, start=None, end=None, universe=None):
         usql, uparams = universe_sql(universe)
+        # CTE 内 JOIN 了 kline_daily，code 需限定前缀（否则 Binder 报歧义）
+        usql = usql.replace("AND code IN", "AND m.code IN")
         mv = self._min_valid or max(self._w - 5, 3)
         sql = _HF_BASE.format(usql=usql) + f"""
 SELECT date, code,
@@ -92,6 +94,7 @@ class HfRvVol(_HfFactor):
 
     def _sql(self, start=None, end=None, universe=None):
         usql, uparams = universe_sql(universe)
+        usql = usql.replace("AND code IN", "AND m.code IN")
         mv = self._min_valid or 15
         sql = _HF_BASE.format(usql=usql) + f"""
 SELECT date, code,
