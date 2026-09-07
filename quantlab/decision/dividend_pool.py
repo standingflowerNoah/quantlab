@@ -161,11 +161,25 @@ def build_div10_score(store: Store, universe: set | None = None) -> pd.DataFrame
 
 
 def div10_holdings(store: Store, sig_date) -> pd.DataFrame:
-    """DIV10 目标持仓（Top10 等权，月末截面，与回测口径一致）"""
+    """DIV10 目标持仓（Top10 等权，月末截面，与回测口径一致）
+
+    截面选择：sig_date 是当月最后一个交易日 → 用当月月末截面（新月调仓生效）；
+    否则用上一个完整月的月末截面（月内持有，不中途换仓）。
+    """
     sig_date = pd.Timestamp(sig_date)
     score = build_div10_score(store)
-    # 生效截面：sig_date 之前（含）最近的月末截面
-    d = score[score["date"] <= sig_date]["date"].max()
+    cand = score[score["date"] <= sig_date]
+    nxt = store.q(
+        "SELECT MIN(date) AS d FROM kline_daily WHERE date > ?", [sig_date])
+    nxt = pd.Timestamp(nxt["d"][0]) if len(nxt) and pd.notna(nxt["d"][0]) else None
+    is_month_end = nxt is not None and nxt.to_period("M") > sig_date.to_period("M")
+    if is_month_end:
+        d = cand["date"].max()          # 含当月截面（本月末，调仓生效）
+    else:
+        prev_month = cand[cand["date"].dt.month != sig_date.month]
+        d = prev_month["date"].max()    # 上一个完整月月末
+    if pd.isna(d):
+        raise RuntimeError("无可用的月末截面")
     s = score[score["date"] == d].sort_values("score", ascending=False).head(TOP_N)
     try:
         names = store.q("SELECT code, name FROM instruments")
