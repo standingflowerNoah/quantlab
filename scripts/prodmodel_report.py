@@ -58,6 +58,9 @@ def load_all():
     p = OUT / "hf_robust.json"
     if p.exists():
         d["hfrob"] = json.loads(p.read_text(encoding="utf-8"))
+    p = OUT / "hf2.json"
+    if p.exists():
+        d["hf2"] = json.loads(p.read_text(encoding="utf-8"))
     return d
 
 
@@ -229,6 +232,7 @@ def main():
         "cap": d.get("cap"),
         "hfadd": d.get("hfadd"),
         "hfrob": d.get("hfrob"),
+        "hf2": d.get("hf2"),
     }
 
     # 模板以 {{ }} 转义花括号（历史 .format 遗留）；先还原再注入 payload，
@@ -339,6 +343,7 @@ td:first-child,th:first-child{text-align:left;}
 <div id="siFastSection"></div>
 <div id="capSection"></div>
 <div id="hfSection"></div>
+<div id="hf2Section"></div>
 
 <h2>九、生产接入建议</h2>
 <div class="concl" id="conclProd"></div>
@@ -750,6 +755,40 @@ const fmtS=v=>v==null?'-':String(v);
           (c3.annual*100).toFixed(1)+' / '+c3.sharpe];
       }}),[fmtS,fmtS,fmtS,fmtS,fmtS]);
   }}
+}})();
+
+// 第六轮：增量合并 + 容量 + 持仓归因
+(function(){{
+  if(!P.hf2)return;
+  const B=P.hf2, wrap=document.getElementById('hf2Section');
+  const order=['PROD','EQ3','HF_AMIH','EQ3_HFA','HFA_OM'].filter(m=>B[m]);
+  let h='<h2>八·补5 第六轮：增量合并、容量补测与持仓归因</h2>';
+  h+='<p class="note">两个已验证增量（sue_i 事件维度、hf_amihud_20 分钟流动性精化）此前从未合并测试。'+
+     '同窗口径同上。overnight_mom_20 再度作为反例入组（第三轮单腿全历史不过）。</p>';
+  h+='<h3>H1 合并候选同窗对比</h3><div class="tbl-scroll"><table id="hf2Tbl1"></table></div>';
+  const md=B._monthly||{{}};
+  h+='<h3>H2 月度配对差（19 个完整月）</h3><div class="tbl-scroll"><table id="hf2Tbl2"></table></div>';
+  h+='<h3>H3 最新持仓 ADV 画像（亿）与 top100 重合度</h3><div class="tbl-scroll"><table id="hf2Tbl3"></table></div>';
+  wrap.innerHTML=h;
+  tbl('hf2Tbl1',['模型','因子构成','年化%','夏普','回撤%','换手','ICIR','2025%','2026%'],
+    order.map(m=>{{
+      const r=B[m];
+      return [m,r.factors.join('+'),(r.annual*100).toFixed(1),r.sharpe,(r.mdd*100).toFixed(1),
+        (r.turnover*100).toFixed(1),r.ic.icir,(r.yearly['2025']*100).toFixed(1),(r.yearly['2026']*100).toFixed(1)];
+    }}),[fmtS,fmtS,fmtPct,null,fmtPct,fmtPct,null,fmtPct,fmtPct]);
+  const mk=Object.keys(md);
+  tbl('hf2Tbl2',['配对','月胜率','月均差(pp)'],
+    mk.map(k=>[k.replace('_vs_',' vs '),fmtPct(md[k].win*100),md[k].mean_pp]),
+    [fmtS,fmtPct,fmtS]);
+  const cap=B._capacity, ovl=B._overlap_top100;
+  tbl('hf2Tbl3',['模型','ADV中位(亿)','ADV 10%分位(亿)',
+    ...Object.keys(ovl).map(k=>k.replace('|','∩'))],
+    order.map(m=>[m,cap[m].adv_med_yi,cap[m].adv_p10_yi,
+      ...Object.keys(ovl).map(k=>{{
+        const p=k.split('|');
+        return (p[0]===m||p[1]===m)?ovl[k]:'-';
+      }})]),
+    [fmtS,null,null,...Object.keys(ovl).map(()=>null)]);
 }})();
 
 // 生产建议

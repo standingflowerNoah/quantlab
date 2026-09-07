@@ -42,6 +42,7 @@ def main():
         "PROD": ["size", "amihud_20"],
         "EQ3": ["size", "amihud_20", "sue_i"],
         "HF_AMIH": ["size", "amihud_20", "hf_amihud_20"],
+        "EQ3_HFA": ["size", "amihud_20", "sue_i", "hf_amihud_20"],
     }
     scores = {k: build_composite(v, universe="ashare_ex", start=START)
               for k, v in models.items()}
