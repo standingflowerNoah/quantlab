@@ -64,6 +64,9 @@ def load_all():
     p = OUT / "hf3.json"
     if p.exists():
         d["hf3"] = json.loads(p.read_text(encoding="utf-8"))
+    p = OUT / "crash2024.json"
+    if p.exists():
+        d["crash"] = json.loads(p.read_text(encoding="utf-8"))
     return d
 
 
@@ -237,6 +240,7 @@ def main():
         "hfrob": d.get("hfrob"),
         "hf2": d.get("hf2"),
         "hf3": d.get("hf3"),
+        "crash": d.get("crash"),
     }
 
     # 模板以 {{ }} 转义花括号（历史 .format 遗留）；先还原再注入 payload，
@@ -349,6 +353,7 @@ td:first-child,th:first-child{text-align:left;}
 <div id="hfSection"></div>
 <div id="hf2Section"></div>
 <div id="hf3Section"></div>
+<div id="crashSection"></div>
 
 <h2>九、生产接入建议</h2>
 <div class="concl" id="conclProd"></div>
@@ -828,13 +833,39 @@ const fmtS=v=>v==null?'-':String(v);
     [fmtS,fmtPct,null,fmtPct,null]);
 }})();
 
+// 第八轮：2024 微盘股灾静态回放
+(function(){{
+  if(!P.crash)return;
+  const K=P.crash, wrap=document.getElementById('crashSection');
+  const order=['PROD','EQ3','HF_AMIH','EQ3_HFA','EQ3_HFA_ICW'].filter(m=>K[m]);
+  const wins=[['crash_2024Q1','股灾谷底 2024-02-05'],['crash_plus_rebound','含反弹 2024-02-08'],['full_2024','2024 全年']];
+  let h='<h2>八·补7 极端情景：2024 年初微盘股灾静态回放</h2>';
+  h+='<p class="note">hf/sue 证据全在牛市窗，唯一未覆盖的尾部情景是 2024-01~02 微盘股灾。'+
+     '方法：取各模型当前最新目标持仓（权重固定）回放该窗口——衡量风格/选股暴露的尾部敏感度，'+
+     '非真实调仓路径（持仓会是另一批票，但因子倾斜持续）。基准=中证1000。</p>';
+  h+='<div class="tbl-scroll"><table id="crashTbl"></table></div>';
+  wrap.innerHTML=h;
+  tbl('crashTbl',['模型','持仓数',...wins.map(w=>w[1])+'%','相对基准(股灾)'],
+    order.map(m=>{{
+      const r=K[m];
+      const rel=(r.crash_2024Q1.port-r.crash_2024Q1.bench)*100;
+      return [m,r.n_holdings,
+        ...wins.map(w=>(r[w[0]].port*100).toFixed(1)),
+        (rel>=0?'+':'')+rel.toFixed(1)+'pp'];
+    }}),[fmtS,null,...wins.map(()=>fmtPct),fmtS]);
+}})();
+
 // 生产建议
 (function(){{
   document.getElementById('conclProd').innerHTML=
-    '<b>每日信号接入：</b>入选模型已在每日流水线「决策信号」步骤并行记账'+
-    '（record_signal_multi 纸面台账），现役生产 PROD 保持不变，待前向样本积累后按双闸门流程切换。'+
-    '候选账本：PROD / PROD_SI / V3_SI / PROD_DUAL / EQ3 / PROD_HF（hf_amihud_20 增量检验胜出者）。'+
-    '详见流水线 scripts/daily_pipeline.py 与 portfolio_state/signals_multi.json。';
+    '<b>裁决队列（2026-12 前向 60 交易日双闸门）：</b>主候选 PROD_HFA'+
+    '（size+amihud_20+sue_i+hf_amihud_20，等权=收益型 / ICW=稳健型）&gt; EQ3 &gt; HF_AMIH；'+
+    'PROD_SI / V3_SI / PROD_DUAL 为背景对照。现役 PROD 不动。'+
+    '<br><b>检验矩阵已完备：</b>变体单调性 / 参数网格 / 滑点×3 / 容量流动性 / 子域（剔微盘）'+
+    ' / 权重法 / 2024 股灾回放——全部无阻碍，hf 窗口仅 ~1.5 年牛市是唯一残留限制。'+
+    '<br><b>复核命令：</b>python scripts/gate_review.py（台账前向收益 + 配对差 + 闸门进度）。'+
+    '候选账本：PROD / PROD_SI / V3_SI / PROD_DUAL / EQ3 / PROD_HF / PROD_HFA '+
+    '（daily_pipeline 每日自动记账）。';
 }})();
 </script>
 </body>
