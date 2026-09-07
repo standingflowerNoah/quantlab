@@ -282,15 +282,26 @@ def render(ic_dfs, bt, seg, cc, names, bench_curve):
     t5 = ic_dfs[5]
     order = list(t5.reindex(t5["icir"].abs().sort_values(ascending=False).index).index)
 
-    bt_rows = "".join(
-        f"<tr><td><code>{n}</code></td>"
-        + "".join(f"<td>{bt[n]['q_ann'][q] * 100:.1f}%</td>" for q in range(5))
-        + f"<td class=\"{'pos' if bt[n]['ls_ann'] > 0 else 'neg'}\">"
-          f"{bt[n]['ls_ann'] * 100:+.1f}%</td><td>{bt[n]['ls_ir']:+.2f}</td>"
-          f"<td>{bt[n]['mono']:.2f}</td>"
-          f"<td>{bt[n]['yr_ls'].get(2025, float('nan')) * 100:+.0f}%/"
-          f"{bt[n]['yr_ls'].get(2026, float('nan')) * 100:+.0f}%</td></tr>"
-        for n in order if bt.get(n))
+    rows = []
+    ic5 = ic_dfs[5]["ic"]  # T+5 IC：有效方向的判定依据
+    for n in order:
+        if not bt.get(n):
+            continue
+        s = float(ic5.get(n, float("nan")))
+        eff = (bt[n]["ls_ann"] * (1.0 if s > 0 else -1.0)
+               if np.isfinite(s) and s != 0 else None)
+        eff_td = (f"<td class=\"{'pos' if eff > 0 else 'neg'}\">{eff * 100:+.1f}%</td>"
+                  if eff is not None else "<td>—</td>")
+        rows.append(
+            f"<tr><td><code>{n}</code></td>"
+            + "".join(f"<td>{bt[n]['q_ann'][q] * 100:.1f}%</td>" for q in range(5))
+            + f"<td class=\"{'pos' if bt[n]['ls_ann'] > 0 else 'neg'}\">"
+              f"{bt[n]['ls_ann'] * 100:+.1f}%</td><td>{bt[n]['ls_ir']:+.2f}</td>"
+              f"<td>{bt[n]['mono']:.2f}</td>"
+              f"<td>{bt[n]['yr_ls'].get(2025, float('nan')) * 100:+.0f}%/"
+              f"{bt[n]['yr_ls'].get(2026, float('nan')) * 100:+.0f}%</td>"
+            + eff_td + "</tr>")
+    bt_rows = "".join(rows)
 
     seg_rows = "".join(
         f"<tr><td><code>{n}</code></td>"
@@ -373,9 +384,10 @@ RankIC / 分层 / 分段稳健性 / 增值性 / 每因子分层曲线 · 样本 
 
 <h2>五、分层回测（5 层 · 每 20 个交易日调仓 · 日频盯市）</h2>
 <p class="sub">Q1 低因子值 → Q5 高因子值；层内等权，持有期内逐日盯市（成分股日收益均值，
-年化基数 252）；多空 = Q5−Q1；25'/26' = 分年多空年化。基准 = 全市场等权。</p>
+年化基数 252）；多空 = Q5−Q1；25'/26' = 分年多空年化；基准 = 全市场等权。
+<strong>有效多空年化</strong> = 按 T+5 IC 方向取用的多空（IC&lt;0 的因子取反向），衡量因子实际可用强度。</p>
 <table><thead><tr><th>因子</th><th>Q1</th><th>Q2</th><th>Q3</th><th>Q4</th><th>Q5</th>
-<th>多空年化</th><th>多空IR</th><th>单调性</th><th>25'/26'</th></tr></thead>
+<th>多空年化</th><th>多空IR</th><th>单调性</th><th>25'/26'</th><th>有效多空年化</th></tr></thead>
 <tbody>{bt_rows}</tbody></table>
 
 <h2>六、分段稳健性与增值性（T+5）</h2>
