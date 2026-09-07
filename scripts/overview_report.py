@@ -135,7 +135,7 @@ def render(data_rows, flist, bt3, bt4_eq, bt4_iv, cur, tgt, track, tsum):
     # 候选模型信号表（2026-09-07 裁决队列：PROD_HFA > EQ3 > PROD_HF）
     from quantlab.decision.tracker import paper_nav_multi
     cand_rows = []
-    for model in ("PROD_HFA", "EQ3_HFA_ICW", "EQ3", "PROD_HF"):
+    for model in ("PROD_HFA", "EQ3_HFA_ICW", "EQ3", "PROD_HF", "DIV10"):
         c = paper_nav_multi(model)
         if c.empty:
             cand_rows.append(
@@ -153,7 +153,8 @@ def render(data_rows, flist, bt3, bt4_eq, bt4_iv, cur, tgt, track, tsum):
     cand_section = (
         '<h2>七、候选模型每日信号（2026-12 双闸门裁决队列）</h2>'
         '<p class="sub">每日流水线决策步骤并行记账的纸面台账（信号计算与生产同链路），'
-        '满 60 交易日后按双闸门裁决是否替换现役 PROD。</p>'
+        '满 60 交易日后按双闸门裁决是否替换现役 PROD。'
+        'DIV10 为红利池卫星仓（高股息暴露，裁决含义为卫星配置价值而非替换）。</p>'
         '<table><thead><tr><th>模型</th><th>纸面天数</th><th>累计收益</th>'
         '<th>相对生产</th></tr></thead><tbody>'
         + "".join(cand_rows) + "</tbody></table>")

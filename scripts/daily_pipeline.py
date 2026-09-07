@@ -187,6 +187,17 @@ def run_decision():
                 cand += "/W3 周三已记"
         except Exception as e:
             log.warning(f"PROD_HFA_W3 记账失败（不影响生产）: {e}")
+        # ── DIV10 红利池内精选观察仓（2026-09-07 红利 2C 第二轮：官方规则
+        #    池复验过闸门二，与五模型不同暴露的卫星仓；持仓口径见
+        #    quantlab/decision/dividend_pool.py）──
+        try:
+            from quantlab.data.store import Store as _SD
+            from quantlab.decision.dividend_pool import div10_holdings
+            h10 = div10_holdings(_SD(), sig_date)
+            record_signal_multi("DIV10", h10, date=sig_date)
+            cand += f"/DIV10 已记账({len(h10)}只)"
+        except Exception as e:
+            log.warning(f"DIV10 记账失败（不影响生产）: {e}")
     except Exception as e:
         log.warning(f"候选模型记账失败（不影响生产）: {e}")
         cand = "候选模型记账跳过"
