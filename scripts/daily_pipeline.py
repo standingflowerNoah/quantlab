@@ -124,6 +124,17 @@ def run_decision():
             cand += "/PROD_DUAL 已记账"
         except Exception as e:
             log.warning(f"PROD_DUAL 记账失败（不影响生产）: {e}")
+        # ── PROD_HF 观察仓（2026-09-07 第五轮：hf_amihud_20 分钟流动性
+        #    精化版，同窗 65.5%/2.49/-21.9% 胜 PROD/EQ3，月配对胜率 68%）──
+        try:
+            prod_hf = build_composite(
+                ["size", "amihud_20", "hf_amihud_20"],
+                universe="ashare_ex")
+            record_signal_multi("PROD_HF", generate_target(prod_hf),
+                                date=sig_date)
+            cand += "/PROD_HF 已记账"
+        except Exception as e:
+            log.warning(f"PROD_HF 记账失败（不影响生产）: {e}")
     except Exception as e:
         log.warning(f"候选模型记账失败（不影响生产）: {e}")
         cand = "候选模型记账跳过"

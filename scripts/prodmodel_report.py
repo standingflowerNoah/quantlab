@@ -52,6 +52,12 @@ def load_all():
     p = OUT / "capacity.json"
     if p.exists():
         d["cap"] = json.loads(p.read_text(encoding="utf-8"))
+    p = OUT / "hf_add.json"
+    if p.exists():
+        d["hfadd"] = json.loads(p.read_text(encoding="utf-8"))
+    p = OUT / "hf_robust.json"
+    if p.exists():
+        d["hfrob"] = json.loads(p.read_text(encoding="utf-8"))
     return d
 
 
@@ -221,6 +227,8 @@ def main():
                         "nav": [round(float(y), 4) for y in v["nav"]]}
                        for k, v in (d.get("sif_curves") or {}).items()],
         "cap": d.get("cap"),
+        "hfadd": d.get("hfadd"),
+        "hfrob": d.get("hfrob"),
     }
 
     # 模板以 {{ }} 转义花括号（历史 .format 遗留）；先还原再注入 payload，
@@ -330,6 +338,7 @@ td:first-child,th:first-child{text-align:left;}
 <div id="siDeepSection"></div>
 <div id="siFastSection"></div>
 <div id="capSection"></div>
+<div id="hfSection"></div>
 
 <h2>九、生产接入建议</h2>
 <div class="concl" id="conclProd"></div>
@@ -700,11 +709,55 @@ const fmtS=v=>v==null?'-':String(v);
     }}),[fmtS,fmtPct,fmtPct,fmtS]);
 }})();
 
+// hf 系增量检验（第五轮，用户指令：|IC| 选样负向翻转）
+(function(){{
+  if(!P.hfadd)return;
+  const A=P.hfadd, R=P.hfrob, wrap=document.getElementById('hfSection');
+  const order=['PROD','EQ3','HF_AMIH','HF3','HF5','EQ3_HF3','HFWF','EQ3_HFWF']
+    .filter(m=>A[m]);
+  let h='<h2>八·补4 hf（高频分钟）因子增量检验</h2>';
+  h+='<p class="note">用户指令：按 |ICIR| 选样、负 IC 因子按 FACTOR_DIRECTION 翻转方向（做多低值），'+
+     'hf 系正式纳入生产候选。统一窗口 2025-02-01~2026-09-04（hf 因子 2025-01-22 起有值），'+
+     'top100 / 20日调仓 / inverse_vol / 全成本。方向表已按实测 IC 符号注册入 composite.py。</p>';
+  h+='<h3>G1 候选模型同窗对比</h3><div class="tbl-scroll"><table id="hfTbl1"></table></div>';
+  const mp=A._monthly_vs_prod||{{}};
+  h+='<h3>G2 月度配对差 vs PROD（19 个完整月）</h3><div class="tbl-scroll"><table id="hfTbl2"></table></div>';
+  if(R){{
+    h+='<h3>G3 稳健性：n×reb 网格范围与滑点压力</h3><div class="tbl-scroll"><table id="hfTbl3"></table></div>';
+  }}
+  wrap.innerHTML=h;
+  tbl('hfTbl1',['模型','因子构成','年化%','夏普','回撤%','换手','IC','ICIR','2025','2026'],
+    order.map(m=>{{
+      const r=A[m];
+      return [m,r.factors.join('+'),(r.annual*100).toFixed(1),r.sharpe,(r.mdd*100).toFixed(1),
+        (r.turnover*100).toFixed(1),r.ic.ic_mean,r.ic.icir,
+        (r.yearly['2025']*100).toFixed(1),(r.yearly['2026']*100).toFixed(1)];
+    }}),[fmtS,fmtS,fmtPct,null,fmtPct,fmtPct,null,null,fmtPct,fmtPct]);
+  tbl('hfTbl2',['模型','月配对胜率','月均差(pp)'],
+    order.filter(m=>mp[m]).map(m=>[m,fmtPct(mp[m].win*100),mp[m].mean_pp]),
+    [fmtS,fmtPct,fmtS]);
+  if(R){{
+    const ms=Object.keys(R.grid);
+    tbl('hfTbl3',['模型','网格年化范围%','网格夏普范围','滑点×2 年化%/夏普','滑点×3 年化%/夏普'],
+      ms.map(m=>{{
+        const g=Object.values(R.grid[m]).filter(v=>v.annual!==undefined);
+        const anns=g.map(v=>v.annual),shs=g.map(v=>v.sharpe);
+        const c2=R.cost[m+'_x2'],c3=R.cost[m+'_x3'];
+        return [m,
+          (Math.min(...anns)*100).toFixed(1)+'-'+(Math.max(...anns)*100).toFixed(1),
+          Math.min(...shs)+'-'+Math.max(...shs),
+          (c2.annual*100).toFixed(1)+' / '+c2.sharpe,
+          (c3.annual*100).toFixed(1)+' / '+c3.sharpe];
+      }}),[fmtS,fmtS,fmtS,fmtS,fmtS]);
+  }}
+}})();
+
 // 生产建议
 (function(){{
   document.getElementById('conclProd').innerHTML=
     '<b>每日信号接入：</b>入选模型已在每日流水线「决策信号」步骤并行记账'+
     '（record_signal_multi 纸面台账），现役生产 PROD 保持不变，待前向样本积累后按双闸门流程切换。'+
+    '候选账本：PROD / PROD_SI / V3_SI / PROD_DUAL / EQ3 / PROD_HF（hf_amihud_20 增量检验胜出者）。'+
     '详见流水线 scripts/daily_pipeline.py 与 portfolio_state/signals_multi.json。';
 }})();
 </script>
