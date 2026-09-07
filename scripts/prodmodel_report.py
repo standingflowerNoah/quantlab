@@ -40,6 +40,9 @@ def load_all():
     p = OUT / "sensitivity.json"
     if p.exists():
         d["sens"] = json.loads(p.read_text(encoding="utf-8"))
+    p = OUT / "si_deep.json"
+    if p.exists():
+        d["si"] = json.loads(p.read_text(encoding="utf-8"))
     return d
 
 
@@ -200,6 +203,7 @@ def main():
         "corr": corr_subset(d["corr"], all_models_factors),
         "yearly": yearly_chart(res),
         "sens": sens_charts(d.get("sens", {})),
+        "si": d.get("si"),
     }
 
     # 模板以 {{ }} 转义花括号（历史 .format 遗留）；先还原再注入 payload，
@@ -306,6 +310,8 @@ td:first-child,th:first-child{text-align:left;}
 <p class="note">选股数 × 调仓频率网格（inverse_vol），及等权 / 最小方差权重法对照。好模型应在参数邻域内表现平滑，而非尖峰依赖。</p>
 <div id="sensWrap"></div>
 
+<div id="siDeepSection"></div>
+
 <h2>九、生产接入建议</h2>
 <div class="concl" id="conclProd"></div>
 
@@ -321,7 +327,7 @@ const fmt=(v,d=1)=>(v>=0?'+':'')+v.toFixed(d);
 function tbl(el,head,rows,fmtFns){{
   const t=document.getElementById(el);
   t.innerHTML='<thead><tr>'+head.map(h=>'<th>'+h+'</th>').join('')+'</tr></thead><tbody>'+
-    rows.map(r=>'<tr>'+r.map((v,i)=>{{const f=fmtFns&&fmtFns[i]||((x)=>x);const cls=(f===fmtPct&&v<0)?'neg':(f===fmtPct&&v>0?'pos':'');return '<td class="'+cls+'">'+f(v)+'</td>'}}).join('')+'</tr>').join('')+'</tbody>';
+    rows.map(r=>'<tr>'+r.map((v,i)=>{{const f=fmtFns&&fmtFns[i]||((x)=>x);const sv=(typeof v==='string')?v:f(v);const cls=(f===fmtPct&&typeof v==='number'&&v<0)?'neg':(f===fmtPct&&typeof v==='number'&&v>0?'pos':'');return '<td class="'+cls+'">'+sv+'</td>'}}).join('')+'</tr>').join('')+'</tbody>';
 }}
 const fmtPct=v=>v==null?'-':v.toFixed(1)+'%';
 const fmtN=v=>v==null?'-':v;
@@ -534,6 +540,79 @@ const fmtS=v=>v==null?'-':String(v);
     hm('sensS'+idx,s.sharpe,m+' 夏普',v=>v.toFixed(2));
     const mrows=Object.entries(s.methods).map(([k,v])=>[k,fmtPct(v.annual*100),v.sharpe,fmtPct(v.mdd*100)]);
     tbl('sensT'+idx,['权重法变体','年化%','夏普','回撤%'],mrows,[fmtS,fmtPct,null,fmtPct]);
+  }});
+}})();
+
+// PROD_SI 深化验证
+(function(){{
+  if(!P.si)return;
+  const S=P.si, wrap=document.getElementById('siDeepSection');
+  const v=S.variants, names=Object.keys(v);
+  let h='<h2>八·补 PROD_SI 切换前深化验证（短窗 2025-05 ~ 2026-09）</h2>';
+  h+='<p class="note">上轮唯一正增量是 PROD_SI，但仅 ~1.3 年证据。本节做切换前四道检验：变体/权重扫描（排除参数巧合）、短窗敏感性网格、滑点压力、月度稳定性。</p>';
+
+  // 1) 变体对比
+  h+='<h3>D1 变体与权重扫描（n100 · reb20 · inverse_vol）</h3><div id="siVarChart" class="chart chart-sm"></div><div class="tbl-scroll"><table id="siVarTbl"></table></div>';
+  // 2) 敏感性
+  h+='<h3>D2 短窗敏感性：年化% 热力图（上 PROD / 下 PROD_SI）</h3><div id="siSensP" class="chart" style="height:250px"></div><div id="siSensS" class="chart" style="height:250px"></div>';
+  // 3) 成本压力
+  h+='<h3>D3 成本压力：滑点 ×2 / ×3（全换手成本=佣金×2+印花税+滑点×2，基准 0.35%/次）</h3><div class="tbl-scroll"><table id="siCostTbl"></table></div>';
+  // 4) 月度
+  const M=S.monthly;
+  h+='<h3>D4 月度收益对照（近 '+M.n_months+' 个完整月）</h3><div id="siMonChart" class="chart"></div>'+
+     '<div class="concl">SI−PROD 配对月差胜率 <b>'+fmtPct(M.diff_win_rate*100)+'</b> · 月均差 '+
+     fmtPct(M.diff_mean*100)+' · SI 最差月 '+M.worst_si_month.ym+'（'+fmtPct(M.worst_si_month.ret*100)+'）· 两模型日收益相关 '+S.daily_ret_corr+'</div>';
+  wrap.innerHTML=h;
+
+  // 变体柱状+表
+  const anns=names.map(n=>+(v[n].annual*100).toFixed(1));
+  echarts.init(document.getElementById('siVarChart')).setOption({{
+    grid:{{left:60,right:20,top:30,bottom:60}},
+    tooltip:{{}},
+    xAxis:{{type:'category',data:names,axisLabel:{{color:C.text,rotate:30,fontSize:10}}}},
+    yAxis:{{type:'value',...axis,axisLabel:{{color:C.gray,formatter:v=>v+'%'}}}},
+    series:[{{type:'bar',data:anns.map(a=>({{value:a,itemStyle:{{color:a>=0?C.red:C.green,borderRadius:3}}}})),
+      label:{{show:true,position:'top',fontSize:10,formatter:p=>p.value}}}}]
+  }});
+  tbl('siVarTbl',['变体','构成','年化%','夏普','回撤%','超额年化%','换手','ICIR'],
+    names.map(n=>{{
+      const cfg={{'PROD':'核心等权（基线）','PROD_SI':'4 因子等权','V3_W40':'0.6核心+0.4SI块','W30':'0.7核心+0.3SI块','W20':'0.8核心+0.2SI块','SUE_ONLY_W40':'0.6核心+0.4仅sue_i','EQ3':'核心+sue_i 等权'}};
+      const x=v[n];
+      return [n,cfg[n]||'-',fmtPct(x.annual*100),x.sharpe,fmtPct(x.mdd*100),fmtPct(x.excess*100),fmtPct(x.turnover*100),S.icir[n]];
+    }}),[fmtS,fmtS,fmtPct,null,fmtPct,fmtPct,fmtPct,null]);
+
+  // 敏感性热力图（短窗）
+  const hm2=(el,grid)=>{{
+    const ns=['50','100','200'],rebs=['10','20','40'];
+    const data=ns.map(n=>rebs.map(r=>+((grid['n'+n+'_reb'+r]||{{}}).annual*100||0).toFixed(1)));
+    echarts.init(document.getElementById(el)).setOption({{
+      grid:{{left:80,right:80,top:10,bottom:60}},
+      tooltip:{{position:'top'}},
+      xAxis:{{type:'category',data:rebs,name:'调仓(日)',nameLocation:'middle',nameGap:35,...axis,axisLabel:{{color:C.text}}}},
+      yAxis:{{type:'category',data:ns,name:'选股数',...axis,axisLabel:{{color:C.text}}}},
+      visualMap:{{min:Math.min(...data.flat()),max:Math.max(...data.flat()),calculable:true,orient:'horizontal',left:'center',bottom:0,inRange:{{color:['#1d9e75','#f5d76e','#d5453c']}}}},
+      series:[{{type:'heatmap',label:{{show:true}},data:(()=>{{const a=[];ns.forEach((n,i)=>rebs.forEach((r,j)=>a.push([j,i,data[i][j]])));return a}})()}}]
+    }});
+  }};
+  hm2('siSensP',S.sensitivity.PROD);
+  hm2('siSensS',S.sensitivity.PROD_SI);
+
+  // 成本压力
+  const ck=Object.keys(S.cost_stress);
+  tbl('siCostTbl',['口径','年化%','夏普','回撤%'],
+    ck.map(k=>[k,fmtPct(S.cost_stress[k].annual*100),S.cost_stress[k].sharpe,fmtPct(S.cost_stress[k].mdd*100)]),
+    [fmtS,fmtPct,null,fmtPct]);
+
+  // 月度
+  echarts.init(document.getElementById('siMonChart')).setOption({{
+    grid:{{left:60,right:20,top:40,bottom:40}},tooltip:{{trigger:'axis'}},
+    legend:{{top:0,textStyle:{{color:C.gray}}}},
+    xAxis:{{type:'category',data:M.months,...axis,axisLabel:{{color:C.text,rotate:30,fontSize:10}}}},
+    yAxis:{{type:'value',...axis,axisLabel:{{color:C.gray,formatter:v=>v+'%'}}}},
+    series:[
+      {{name:'PROD',type:'bar',data:M.prod.map(v=>+(v*100).toFixed(1)),itemStyle:{{color:C.gray,opacity:0.7}},barWidth:10}},
+      {{name:'PROD_SI',type:'bar',data:M.si.map(v=>+(v*100).toFixed(1)),itemStyle:{{color:C.accent}},barWidth:10}}
+    ]
   }});
 }})();
 
