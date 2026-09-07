@@ -230,7 +230,10 @@ def http_get(path: str, timeout: float = 120.0):
     import msgpack
     ensure_service()
     url = f"http://{config.FSDB_HOST}:{config.FSDB_PORT}{path}"
-    z = requests.get(url, timeout=timeout)
+    # 本机引擎必须直连：绕过 HTTP(S)_PROXY 环境变量——代理会让批量
+    # 分钟拉取大量 503/拒连（2026-09-07 实测事故，见 research/生产模型重构.md）
+    z = requests.get(url, timeout=timeout,
+                     proxies={"http": None, "https": None})
     z.raise_for_status()
     return msgpack.unpackb(z.content, raw=False)
 
