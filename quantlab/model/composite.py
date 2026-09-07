@@ -100,6 +100,57 @@ def _load_ranked(name: str, store: Store) -> pd.DataFrame:
     return fv[["date", "code", "r"]]
 
 
+def factor_coverage(factor_names: list[str],
+                    asof=None,
+                    min_ratio: float = 0.6) -> pd.DataFrame:
+    """因子水位与覆盖度体检（防 NaN-skip 静默降级——2026-09-07 hf 事故防线）
+
+    对每个因子直扫因子湖 parquet（不依赖 DuckDB 视图，写锁安全）：
+      - f_max: 因子最新日期；n_max: 最新日覆盖股票数；n_prev: 前一交易日覆盖数
+      - ok = (f_max 不落后 asof 超过 1 个自然日) 且 (n_max >= min_ratio * n_prev)
+
+    参数:
+        factor_names: 因子名列表
+        asof: 参照日期（默认取 kline_daily 最新交易日）
+        min_ratio: 覆盖度相对前一交易日的下限（防半写）
+    返回: factor/f_max/n_max/n_prev/behind_days/ok 明细表
+    """
+    import duckdb
+    from .. import config
+
+    store = Store()
+    if asof is None:
+        asof = store.q("SELECT max(date) AS d FROM kline_daily")["d"][0]
+    asof = pd.Timestamp(asof)
+    rows = []
+    con = duckdb.connect()
+    try:
+        for name in factor_names:
+            pat = str(config.FACTOR_DIR / name / "part-*.parquet").replace("\\", "/")
+            try:
+                r = con.execute(f"""
+                    WITH t AS (SELECT CAST(date AS DATE) AS d, code
+                               FROM read_parquet('{pat}')),
+                    mx AS (SELECT max(d) AS m FROM t)
+                    SELECT (SELECT m FROM mx) AS f_max,
+                           (SELECT count(DISTINCT code) FROM t WHERE d = (SELECT m FROM mx)) AS n_max,
+                           (SELECT count(DISTINCT code) FROM t
+                            WHERE d = (SELECT max(d) FROM t WHERE d < (SELECT m FROM mx))) AS n_prev
+                """).fetchone()
+            except Exception:
+                r = (None, 0, 0)
+            f_max, n_max, n_prev = r
+            f_max = pd.Timestamp(f_max) if f_max is not None else None
+            behind = (asof - f_max).days if f_max is not None else 999
+            ratio = (n_max / n_prev) if n_prev else 0.0
+            rows.append({"factor": name, "f_max": f_max, "n_max": int(n_max or 0),
+                         "n_prev": int(n_prev or 0), "behind_days": behind,
+                         "ok": behind <= 1 and ratio >= min_ratio})
+    finally:
+        con.close()
+    return pd.DataFrame(rows)
+
+
 def _audit_gate(names: list[str]):
     """审查闸门：合成引用了审查 FAIL 的因子时告警（治理闭环）。
 

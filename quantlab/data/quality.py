@@ -125,7 +125,7 @@ def check_all(sample: int = 30) -> pd.DataFrame:
             n_big = int((m["err"] > 0.02).sum())
             if n_big <= sample * 0.1:
                 add("kline_daily", "consistency", "pass",
-                    f"抽样 {len(m)} 只收盘价 vs 腾讯行情一致（>{2:.0%}偏差 {n_big} 只，含盘中波动）")
+                    f"抽样 {len(m)} 只收盘价 vs 腾讯行情一致（>2% 偏差 {n_big} 只，含盘中波动）")
             else:
                 add("kline_daily", "consistency", "warn",
                     f"抽样 {len(m)} 只中 {n_big} 只收盘价偏差>2%")
@@ -150,6 +150,29 @@ def check_all(sample: int = 30) -> pd.DataFrame:
                 f"复权因子抽样 {len(codes)} 只全部通过")
     except Exception as e:
         add("kline_daily", "validity", "fail", f"复权校验异常: {e}")
+
+    # ── 6. 一致性：因子湖水位 vs K线水位（防 NaN-skip 快照静默降级） ──
+    # 2026-09-07 hf 事故：minute_feat 停在 09-04 → 21 个 hf 因子停写，
+    # 流水线无任何报警，PROD_HFA 快照降级为 3 因子口径
+    try:
+        from ..model.composite import factor_coverage
+        cov = factor_coverage(
+            ["size", "amihud_20", "sue_i", "overnight_mom_20", "hf_amihud_20"])
+        bad = cov[~cov["ok"]]
+        if bad.empty:
+            detail = "; ".join(f"{r.factor}@{r.f_max.date()}({r.n_max}只)"
+                               for r in cov.itertuples())
+            add("factor_lake", "consistency", "pass", f"模型因子水位一致: {detail}")
+        else:
+            for r in bad.itertuples():
+                dep = ("（hf 系→分钟特征宽表）"
+                       if str(r.factor).startswith("hf_") else "")
+                add("factor_lake", "consistency", "fail",
+                    f"因子 {r.factor} 水位落后 {r.behind_days} 天"
+                    f"（最新 {r.f_max}，覆盖 {r.n_max}/{r.n_prev}）——"
+                    f"候选快照已被决策闸门阻止，请检查依赖链{dep}")
+    except Exception as e:
+        add("factor_lake", "consistency", "fail", f"因子水位检查异常: {e}")
 
     return pd.DataFrame(issues)
 

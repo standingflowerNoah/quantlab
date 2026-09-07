@@ -124,6 +124,17 @@ def run_decision():
 
     # ── 候选模型并行记账（不改变生产，积累 sue_i 前向样本；失败不阻塞）──
     try:
+        # 防降级闸门（2026-09-07 hf 事故：build_composite 对缺日期因子 NaN-skip
+        # 静默降级）——任一模型因子水位落后或覆盖骤降时，候选快照整块不记
+        from quantlab.model.composite import factor_coverage
+        cov = factor_coverage(
+            ["size", "amihud_20", "sue_i", "overnight_mom_20", "hf_amihud_20"])
+        bad = cov[~cov["ok"]]
+        if not bad.empty:
+            detail = "; ".join(f"{r.factor}(最新{r.f_max},落后{r.behind_days}天,"
+                               f"覆盖{r.n_max}/{r.n_prev})"
+                               for r in bad.itertuples())
+            raise RuntimeError(f"因子覆盖不足，候选记账跳过（防快照降级）: {detail}")
         from quantlab.model import build_composite
         core = build_composite(["size", "amihud_20"], universe="ashare_ex")
         new_si = build_composite(["sue_i", "overnight_mom_20"],
