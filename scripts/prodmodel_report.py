@@ -61,6 +61,9 @@ def load_all():
     p = OUT / "hf2.json"
     if p.exists():
         d["hf2"] = json.loads(p.read_text(encoding="utf-8"))
+    p = OUT / "hf3.json"
+    if p.exists():
+        d["hf3"] = json.loads(p.read_text(encoding="utf-8"))
     return d
 
 
@@ -233,6 +236,7 @@ def main():
         "hfadd": d.get("hfadd"),
         "hfrob": d.get("hfrob"),
         "hf2": d.get("hf2"),
+        "hf3": d.get("hf3"),
     }
 
     # 模板以 {{ }} 转义花括号（历史 .format 遗留）；先还原再注入 payload，
@@ -344,6 +348,7 @@ td:first-child,th:first-child{text-align:left;}
 <div id="capSection"></div>
 <div id="hfSection"></div>
 <div id="hf2Section"></div>
+<div id="hf3Section"></div>
 
 <h2>九、生产接入建议</h2>
 <div class="concl" id="conclProd"></div>
@@ -789,6 +794,38 @@ const fmtS=v=>v==null?'-':String(v);
         return (p[0]===m||p[1]===m)?ovl[k]:'-';
       }})]),
     [fmtS,null,null,...Object.keys(ovl).map(()=>null)]);
+}})();
+
+// 第七轮：子域检验 / 权重法 / 独特信息归因
+(function(){{
+  if(!P.hf3)return;
+  const T=P.hf3, wrap=document.getElementById('hf3Section');
+  let h='<h2>八·补6 第七轮：子域检验、权重法与独特信息归因</h2>';
+  h+='<p class="note">① 剔除每日市值底部 30% 后重测（回答"是否纯微盘 beta"）；'+
+     '② EQ3_HFA 的 ICIR 加权变体；③ hf_amihud_20 相对 amihud_20 的秩残差 IC（独特信息量化）。</p>';
+  h+='<h3>I1 子域（剔市值底 30%，保留 ~70%）+ ICW 变体</h3><div class="tbl-scroll"><table id="hf3Tbl1"></table></div>';
+  const rs=T.RESID_HF_AMIH;
+  h+='<h3>I2 hf_amihud 独特信息（秩残差 IC20）</h3>'+
+     '<div class="concl">残差 IC '+rs.ic_mean+'（ICIR '+rs.icir+'，'+rs.n_days+' 日；'+
+     '2025: '+rs.yearly['2025']+' / 2026: '+rs.yearly['2026']+'）——独特信息弱但为正且 2026 年增强，'+
+     '与"ρ=0.86 仍贡献组合增量"一致：增量主要来自头部选股的边际重排而非全域预测力。</div>';
+  wrap.innerHTML=h;
+  const rows1=[
+    ['PROD（全池对照）','56.3','2.01','-25.6','0.484'],
+    ['EQ3（全池对照）','61.3','2.29','-22.6','0.588'],
+    ['EQ3_HFA（全池对照）','71.7','2.79','-20.7','0.629'],
+  ];
+  const sub=['SUB_PROD','SUB_EQ3','SUB_EQ3_HFA'].filter(k=>T[k]);
+  sub.forEach(k=>{{
+    const v=T[k];
+    rows1.push([k.replace('SUB_','')+'（剔微盘）',(v.annual*100).toFixed(1),v.sharpe,(v.mdd*100).toFixed(1),v.ic.icir]);
+  }});
+  if(T.EQ3_HFA_ICW){{
+    const v=T.EQ3_HFA_ICW;
+    rows1.push(['EQ3_HFA_ICW（ICIR 加权）',(v.annual*100).toFixed(1),v.sharpe,(v.mdd*100).toFixed(1),v.ic.icir]);
+  }}
+  tbl('hf3Tbl1',['模型','年化%','夏普','回撤%','ICIR'],rows1,
+    [fmtS,fmtPct,null,fmtPct,null]);
 }})();
 
 // 生产建议
