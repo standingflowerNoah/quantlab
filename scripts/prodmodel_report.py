@@ -43,6 +43,12 @@ def load_all():
     p = OUT / "si_deep.json"
     if p.exists():
         d["si"] = json.loads(p.read_text(encoding="utf-8"))
+    p = OUT / "si_fast.json"
+    if p.exists():
+        d["sif"] = json.loads(p.read_text(encoding="utf-8"))
+        cp = OUT / "si_fast_curves.pkl"
+        if cp.exists():
+            d["sif_curves"] = pd.read_pickle(cp)
     return d
 
 
@@ -204,6 +210,13 @@ def main():
         "yearly": yearly_chart(res),
         "sens": sens_charts(d.get("sens", {})),
         "si": d.get("si"),
+        "sif": (d.get("sif") or {}).get("SIF"),
+        "om_leg": (d.get("sif") or {}).get("OM_LEG"),
+        "sif_curves": [{"name": k,
+                        "dates": [str(pd.Timestamp(x).date())
+                                  for x in v["date"]],
+                        "nav": [round(float(y), 4) for y in v["nav"]]}
+                       for k, v in (d.get("sif_curves") or {}).items()],
     }
 
     # 模板以 {{ }} 转义花括号（历史 .format 遗留）；先还原再注入 payload，
@@ -311,6 +324,7 @@ td:first-child,th:first-child{text-align:left;}
 <div id="sensWrap"></div>
 
 <div id="siDeepSection"></div>
+<div id="siFastSection"></div>
 
 <h2>九、生产接入建议</h2>
 <div class="concl" id="conclProd"></div>
@@ -613,6 +627,41 @@ const fmtS=v=>v==null?'-':String(v);
       {{name:'PROD',type:'bar',data:M.prod.map(v=>+(v*100).toFixed(1)),itemStyle:{{color:C.gray,opacity:0.7}},barWidth:10}},
       {{name:'PROD_SI',type:'bar',data:M.si.map(v=>+(v*100).toFixed(1)),itemStyle:{{color:C.accent}},barWidth:10}}
     ]
+  }});
+}})();
+
+// sue_i_fast 历史回补验证
+(function(){{
+  if(!P.sif||!P.om_leg)return;
+  const S=P.sif, OM=P.om_leg, wrap=document.getElementById('siFastSection');
+  const w0=S._window_start||'?';
+  let h='<h2>八·补2 sue_i_fast 历史回补验证（4 季快窗变体）</h2>';
+  h+='<p class="note">标准 sue 框架（8 季窗）受财务数据 2021Q1 起限制最早 2025-04 出值。'+
+     'sue_i_fast 把窗口缩到 4 季（σ 仅 4 期观测，更噪），有效起点提前到 2023 中——'+
+     '多出约 2 年含 2024 微盘股灾年的检验窗。<b>这是因子定义变体，用于稳健性三角验证。</b></p>';
+  const omk=Object.keys(OM);
+  h+='<h3>E1 全历史单腿检验：overnight_mom_20 加入核心（2022-07+）</h3><div class="tbl-scroll"><table id="sifOmTbl"></table></div>';
+  const sk=Object.keys(S).filter(k=>!k.startsWith('_')&&S[k].annual!==undefined);
+  h+='<h3>E2 sue_i_fast 全期检验（'+w0+' ~ 2026-09，n100/reb20）</h3><div class="tbl-scroll"><table id="sifTbl"></table></div>';
+  h+='<h3>E3 净值对照（各模型自有起点）</h3><div id="sifNav" class="chart"></div>';
+  wrap.innerHTML=h;
+
+  const rowOf=(n,x)=>[n,fmtPct(x.annual*100),x.sharpe,fmtPct(x.mdd*100),
+    x.icir!=null?x.icir:'-',fmtPct(x.turnover*100),
+    x.is_oos?('样本外 '+fmtPct(x.is_oos.out.annual*100)+'/夏普'+x.is_oos.out.sharpe):'-'];
+  tbl('sifOmTbl',['模型','年化%','夏普','回撤%','ICIR','换手','IS/OOS'],
+    omk.map(k=>rowOf(k+'（2022-07+）',OM[k])),[fmtS,fmtPct,null,fmtPct,null,fmtPct,fmtS]);
+  tbl('sifTbl',['模型','年化%','夏普','回撤%','ICIR','换手','IS/OOS(2025-01+)'],
+    sk.map(k=>rowOf(k,S[k])),[fmtS,fmtPct,null,fmtPct,null,fmtPct,fmtS]);
+
+  const PA=[C.gray,C.amber,C.accent];
+  echarts.init(document.getElementById('sifNav')).setOption({{
+    grid:{{left:70,right:30,top:40,bottom:50}},tooltip:{{trigger:'axis'}},
+    legend:{{top:0,textStyle:{{color:C.gray}}}},
+    xAxis:{{type:'time',...axis}},yAxis:{{type:'value',scale:true,...axis}},
+    series:P.sif_curves.map((s,i)=>({{name:s.name,type:'line',symbol:'none',
+      lineStyle:{{width:2,color:PA[i%PA.length]}},
+      data:s.dates.map((d,j)=>[d,s.nav[j]])}}))
   }});
 }})();
 

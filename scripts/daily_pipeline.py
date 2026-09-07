@@ -106,6 +106,15 @@ def run_decision():
         record_signal_multi("PROD_SI", generate_target(prod_si), date=sig_date)
         record_signal_multi("V3_SI", generate_target(v3_si), date=sig_date)
         cand = "PROD_SI/V3_SI 已记账"
+        # ── EQ3 观察仓（2026-09-07 第二轮：overnight_mom 全历史稀释剔除，
+        #    主切换候选修正为 核心+sue_i 等权）──
+        try:
+            eq3 = build_composite(["size", "amihud_20", "sue_i"],
+                                  universe="ashare_ex")
+            record_signal_multi("EQ3", generate_target(eq3), date=sig_date)
+            cand += "/EQ3 已记账"
+        except Exception as e:
+            log.warning(f"EQ3 记账失败（不影响生产）: {e}")
         # ── PROD_DUAL 两块式观察仓（2026-09-07 生产模型重构立项）──
         try:
             from quantlab.model.pool_select import build_dual_score

@@ -39,6 +39,8 @@ TRACKED_MODELS = {
     "PROD_SI": "直加组：size+amihud_20+sue_i+overnight_mom_20",
     "V3_SI": "条件融合：0.6×rank(核心)+0.4×rank(sue_i+overnight)",
     "PROD_DUAL": "两块式：0.9×rank(核心)+0.1×rank(风格卫星块)（观察仓）",
+    "EQ3": "核心+sue_i 等权（2026-09-07 第二轮修正的主切换候选："
+           "overnight_mom 单腿全历史稀释被剔除）",
 }
 
 
