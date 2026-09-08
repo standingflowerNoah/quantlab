@@ -914,8 +914,6 @@ details table{{margin:10px 0 4px;}}
 <div id="scrBox"></div>
 <div id="scrOut"></div>
 
-%%SCR%%
-
 <p class="note" style="margin-top:24px">本报告由 QuantLab 五层流水线自动生成（scripts/overview_report.py，v3 每日标准范本）。仅供研究，不构成投资建议。</p>
 </div>
 
@@ -975,6 +973,8 @@ const axis={{axisLine:{{lineStyle:{{color:line}}}},axisLabel:{{color:gray}},spli
   }});
 }})();
 </script>
+
+%%SCR%%
 </body>
 </html>
 """.replace("{bt_start}", BT_START)
