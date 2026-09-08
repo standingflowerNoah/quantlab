@@ -105,25 +105,30 @@ def multi_signal_dates(model: str) -> list:
     return [pd.Timestamp(d) for d in df["date"]]
 
 
-def paper_nav_multi(model: str) -> pd.DataFrame:
-    """候选模型纸面净值（盯市逻辑与 paper_nav 相同，读多模型账本）"""
+def paper_nav_multi(model: str, px: pd.DataFrame | None = None) -> pd.DataFrame:
+    """候选模型纸面净值（盯市逻辑与 paper_nav 相同，读多模型账本）
+
+    px: 预计算的后复权价格宽表（多模型批量盯市时共享，省去重复读表）
+    """
     store = Store()
     try:
         sig = store.q("SELECT date, code, weight FROM signal_portfolio_multi "
                       "WHERE model=? ORDER BY date", [model])
     except Exception:
         return pd.DataFrame(columns=["date", "ret", "nav"])
-    return _mark_to_market(sig)
+    return _mark_to_market(sig, px=px)
 
 
-def _mark_to_market(sig: pd.DataFrame) -> pd.DataFrame:
+def _mark_to_market(sig: pd.DataFrame,
+                    px: pd.DataFrame | None = None) -> pd.DataFrame:
     """快照序列逐日盯市 → 日收益曲线（与 paper_nav 口径一致）"""
     if sig.empty or sig["date"].nunique() < 2:
         return pd.DataFrame(columns=["date", "ret", "nav"])
     sig["date"] = pd.to_datetime(sig["date"])
     dates = sorted(sig["date"].unique())
 
-    px = store_q_prices()
+    if px is None:
+        px = store_q_prices()
     if px.empty:
         return pd.DataFrame(columns=["date", "ret", "nav"])
     pmat = px.pivot(index="date", columns="code", values="c").sort_index()

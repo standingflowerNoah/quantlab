@@ -21,13 +21,15 @@ log = get_logger(__name__)
 def run_optimized_backtest(score: pd.DataFrame, n_stocks: int = 100,
                            rebalance: int = 40, method: str = "inverse_vol",
                            lookback: int = 60, start=None, end=None,
-                           benchmark: str = "000852.SH") -> dict:
+                           benchmark: str = "000852.SH",
+                           pmat: pd.DataFrame | None = None) -> dict:
     """权重优化选股回测
 
     参数:
         method: equal / inverse_vol / min_var / risk_parity
         lookback: 协方差估计用的历史日数
         benchmark: "000852.SH"(中证1000，默认) / "equal"(全A等权) / 指数代码
+        pmat: 预计算的后复权价格宽表（多模型批量回测时共享，省去重复读表）
     （默认 40 日调仓 + inverse_vol，经 IC 衰减与调仓网格实测最优）
     """
     store = Store()
@@ -37,9 +39,10 @@ def run_optimized_backtest(score: pd.DataFrame, n_stocks: int = 100,
     if end is not None:
         score = score[score["date"] <= pd.to_datetime(end)]
 
-    px = store.q("SELECT date, code, close*adj_factor AS c FROM kline_daily")
-    px["date"] = pd.to_datetime(px["date"])
-    pmat = px.pivot(index="date", columns="code", values="c").sort_index()
+    if pmat is None:
+        px = store.q("SELECT date, code, close*adj_factor AS c FROM kline_daily")
+        px["date"] = pd.to_datetime(px["date"])
+        pmat = px.pivot(index="date", columns="code", values="c").sort_index()
     rmat = pmat.pct_change()
 
     bench_ret = _benchmark_returns(pmat, store, benchmark)
