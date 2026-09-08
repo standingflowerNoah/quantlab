@@ -400,6 +400,13 @@ def main():
     pmat = px.pivot(index="date", columns="code", values="c").sort_index()
     rmat = pmat.pct_change()
 
+    # 中证1000 收盘序列（纸面账本超额基准 + 图表基准线）
+    bm = store.q(
+        "SELECT date, close FROM index_kline "
+        "WHERE code='000852.SH' ORDER BY date")
+    bm["date"] = pd.to_datetime(bm["date"])
+    bm_close = bm.set_index("date")["close"].astype(float)
+
     model_rows = []
     payload_bt = []
     payload_bm = None
@@ -445,11 +452,14 @@ def main():
         "SELECT model, date, code, weight FROM signal_portfolio_multi "
         "ORDER BY model, date")
     paper_curves: dict[str, pd.DataFrame] = {}
+    paper_starts: dict[str, str] = {}
     if not sig_all.empty:
         for mdl, g in sig_all.groupby("model"):
             c = _mark_to_market(g[["date", "code", "weight"]], px=px)
             if not c.empty:
                 paper_curves[mdl] = c
+                # 基准对齐起点 = 该模型首次快照日（持仓自当日起算）
+                paper_starts[mdl] = str(pd.Timestamp(g["date"].min()).date())
     prod_curve = paper_curves.get("PROD")
 
     # 因子评估面板（52 周周均 IC + 1 年头部净值迷你图）
@@ -471,9 +481,21 @@ def main():
     except Exception:
         ledger = pd.DataFrame()
 
+    # 选股器数据：各模型最新信号日快照（代码/名称/权重）
+    screener = {}
+    for m in model_rows:
+        snap = _latest_snapshot(None if m["name"] == "PROD" else m["name"])
+        if snap is not None:
+            d, h = snap
+            screener[m["name"]] = {
+                "date": d,
+                "stocks": [[r["code"], str(r.get("name", "")),
+                            round(float(r["weight"]), 4)]
+                           for r in h.to_dict("records")]}
+
     html = render(data_rows, flist, factor_panels, model_rows, payload_bt,
-                  payload_bm, tgt, paper_curves, prod_curve,
-                  crowding, cov, ledger)
+                  payload_bm, tgt, paper_curves, prod_curve, bm_close,
+                  paper_starts, screener, crowding, cov, ledger)
     out = REPORTS_DIR / "overview_report.html"
     out.write_text(html, encoding="utf-8")
     print(f"报告已生成: {out} ({time.time()-t0:.0f}s)")
@@ -505,8 +527,8 @@ TAG_CLS = {"现役": "tag-live", "切换候选": "tag-cand", "稳健变体": "ta
 
 
 def render(data_rows, flist, factor_panels, model_rows, payload_bt,
-           payload_bm, tgt, paper_curves, prod_curve, crowding,
-           cov, ledger):
+           payload_bm, tgt, paper_curves, prod_curve, bm_close,
+           paper_starts, screener, crowding, cov, ledger):
     # ── 数据水位（含滞后天数）──
     data_tr = ""
     for r in data_rows:
@@ -618,19 +640,39 @@ def render(data_rows, flist, factor_panels, model_rows, payload_bt,
             f"<td>{_fmt(m['ic'], pct=False)}</td>"
             f"<td>{_fmt(m['icir'], pct=False)}</td></tr>")
 
-    # ── 纸面前向账本 ──
+    # ── 纸面前向账本（含中证1000 超额）──
     paper_payload = []
     for name, c in paper_curves.items():
         pts = [[str(pd.Timestamp(d).date()), round(float(v), 4)]
                for d, v in zip(c["date"], c["nav"])]
         paper_payload.append([name, pts])
+
+    # 基准：窗口 = [该模型首次快照日, 末次盯市日]，起点归一 1.0
+    def _bm_nav(start, end):
+        w = bm_close.loc[start:end]
+        if w.empty:
+            return pd.Series(dtype=float)
+        return w / w.iloc[0]
+
+    # 图表基准线：全部账本窗口 [最早快照日, 最晚盯市日]
+    pbm_pts = []
+    if paper_curves and paper_starts:
+        g_start = min(paper_starts.values())
+        g_end = max(pd.to_datetime(c["date"]).max() for c in paper_curves.values())
+        bnav = _bm_nav(g_start, g_end)
+        pbm_pts = [[str(pd.Timestamp(d).date()), round(float(v), 4)]
+                   for d, v in bnav.items()]
+
     paper_meta = {}
     prod_cum = None
     for name, c in paper_curves.items():
         cum = float(c["nav"].iloc[-1] - 1)
+        bnav = _bm_nav(paper_starts.get(name, c["date"].iloc[0]),
+                       c["date"].max())
+        bm_cum = (float(bnav.iloc[-1] - 1) if len(bnav) else 0.0)
         if name == "PROD":
             prod_cum = cum
-        paper_meta[name] = {"days": len(c), "cum": cum,
+        paper_meta[name] = {"days": len(c), "cum": cum, "bm_cum": bm_cum,
                             "start": str(pd.Timestamp(c['date'].iloc[0]).date())}
     paper_rows = ""
     for m in model_rows:
@@ -638,17 +680,20 @@ def render(data_rows, flist, factor_panels, model_rows, payload_bt,
         info = paper_meta.get(name)
         if info is None:
             paper_rows += (f"<tr><td><b>{name}</b></td>"
-                           f"<td>积累中（快照不足 2 期）</td><td>—</td><td>—</td></tr>")
+                           f"<td>积累中（快照不足 2 期）</td><td>—</td><td>—</td><td>—</td></tr>")
             continue
         rel = (info["cum"] - prod_cum
                if prod_cum is not None and name != "PROD" else None)
         rel_s = "—" if rel is None else f"{rel:+.2%}"
+        exc = info["cum"] - info["bm_cum"]
         cum_cls = "pos" if info["cum"] >= 0 else "neg"
+        exc_cls = "pos" if exc >= 0 else "neg"
         paper_rows += (
             f"<tr><td><b>{name}</b>"
             f"<span class='tag {TAG_CLS.get(m['tag'], 'tag-watch')}'>{m['tag']}</span></td>"
             f"<td>{info['days']} 日（{info['start']}~）</td>"
             f"<td class='{cum_cls}'>{info['cum']:+.2%}</td>"
+            f"<td class='{exc_cls}'>{exc:+.2%}</td>"
             f"<td>{rel_s}</td></tr>")
     track_days = paper_meta.get("PROD", {}).get("days", 0)
 
@@ -734,6 +779,7 @@ def render(data_rows, flist, factor_panels, model_rows, payload_bt,
 
     payload = json.dumps({
         "bt": payload_bt, "bm": payload_bm, "paper": paper_payload,
+        "pbm": pbm_pts, "scr": screener,
     }, ensure_ascii=False)
 
     return TMPL.format(
@@ -743,7 +789,7 @@ def render(data_rows, flist, factor_panels, model_rows, payload_bt,
         bt_rows=bt_rows, paper_rows=paper_rows, hold_section=hold_section,
         crowd_section=crowd_section, top10_tr=top10_tr,
         track_days=track_days, sig_day=sig_day_s, tgt_n=len(tgt),
-        payload=payload)
+        payload=payload).replace("%%SCR%%", SCR_BLOCK)
 
 
 TMPL = """<!DOCTYPE html>
@@ -851,10 +897,10 @@ details table{{margin:10px 0 4px;}}
 <h2>五、纸面前向账本（全模型）</h2>
 <p class="sub">信号快照记录于每日流水线，逐日盯市，与回测独立的前向验证账本。
 账本自 2026-09-07 同日起算，满 60 交易日后（约 2026-12）双闸门裁决；
-所有模型同图呈现，点击图例聚焦。</p>
+所有模型同图呈现（灰虚线=中证1000），点击图例聚焦。超额 = 累计收益 − 同窗口基准收益。</p>
 <div id="chartPaper" class="chart" style="height:380px"></div>
 <table>
-<thead><tr><th>模型</th><th>纸面天数</th><th>累计收益</th><th>相对现役 PROD</th></tr></thead>
+<thead><tr><th>模型</th><th>纸面天数</th><th>累计收益</th><th>超额 vs 中证1000</th><th>相对现役 PROD</th></tr></thead>
 <tbody>{paper_rows}</tbody>
 </table>
 
@@ -862,7 +908,15 @@ details table{{margin:10px 0 4px;}}
 
 {crowd_section}
 
-<p class="note" style="margin-top:24px">本报告由 QuantLab 五层流水线自动生成（scripts/overview_report.py，十模型并列版 v2）。仅供研究，不构成投资建议。</p>
+<h2>八、选股器</h2>
+<p class="sub">自选观察工具：勾选模型并选择组合逻辑——<b>且</b> = 交集（同时出现在所有选中模型的最新持仓），
+<b>或</b> = 并集（出现在任一选中模型）。结果按命中模型数与权重降序，权重为各模型最新信号日快照。</p>
+<div id="scrBox"></div>
+<div id="scrOut"></div>
+
+%%SCR%%
+
+<p class="note" style="margin-top:24px">本报告由 QuantLab 五层流水线自动生成（scripts/overview_report.py，v3 每日标准范本）。仅供研究，不构成投资建议。</p>
 </div>
 
 <script>
@@ -906,6 +960,11 @@ const axis={{axisLine:{{lineStyle:{{color:line}}}},axisLabel:{{color:gray}},spli
     emphasis: {{focus: 'series'}},
     data: pts
   }}));
+  if(P.pbm && P.pbm.length) series.push({{name: '中证1000', type: 'line',
+    smooth: false, symbol: 'none',
+    lineStyle: {{width: 1.5, color: gray, type: 'dashed'}},
+    itemStyle: {{color: gray}}, emphasis: {{focus: 'series'}},
+    data: P.pbm}});
   echarts.init(document.getElementById('chartPaper')).setOption({{
     grid:{{left:60,right:30,top:60,bottom:40}},
     tooltip:{{trigger:'axis'}},
@@ -919,6 +978,88 @@ const axis={{axisLine:{{lineStyle:{{color:line}}}},axisLabel:{{color:gray}},spli
 </body>
 </html>
 """.replace("{bt_start}", BT_START)
+
+
+# ─────────────────────────── 选股器（原始字符串，不参与 format）───────────────────────────
+SCR_BLOCK = """
+<style>
+.scrBox{display:flex;flex-wrap:wrap;gap:10px;align-items:center;background:#171a21;
+border:1px solid #2a2f3a;border-radius:10px;padding:12px 16px;margin:10px 0;}
+.scrItem{display:inline-flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;user-select:none;}
+.scrItem input{accent-color:#378add;cursor:pointer;}
+.scrSep{width:1px;height:18px;background:#2a2f3a;margin:0 4px;}
+.btn{background:#1c3a5e;color:#7fb2e5;border:1px solid #2b5583;border-radius:6px;
+padding:5px 16px;font-size:13px;cursor:pointer;}
+.btn:hover{background:#244b79;}
+.btn.ghost{background:transparent;color:#9aa3b2;border-color:#2a2f3a;}
+</style>
+<script>
+(function(){
+  const scr = P.scr || {};
+  const models = Object.keys(scr);
+  const box = document.getElementById('scrBox');
+  const out = document.getElementById('scrOut');
+  if(!models.length){ box.innerHTML = "<p class='sub'>暂无模型快照。</p>"; return; }
+  box.className = 'scrBox';
+  box.innerHTML = models.map(m => {
+    const d = scr[m], has = d.stocks && d.stocks.length;
+    return `<label class="scrItem"><input type="checkbox" value="${m}" data-auto="1" ${has?'':'disabled'} ${m==='PROD'?'checked':''}><b style="color:${COLORS[m]||'#9aa3b2'}">${m}</b><span class="muted" style="margin-left:0">${has? d.stocks.length+' 只 · '+d.date : '无快照'}</span></label>`;
+  }).join('')
+  + `<span class="scrSep"></span>
+  <label class="scrItem"><input type="radio" name="scrLogic" value="and" checked><b>且</b><span class="muted" style="margin-left:0">交集</span></label>
+  <label class="scrItem"><input type="radio" name="scrLogic" value="or"><b>或</b><span class="muted" style="margin-left:0">并集</span></label>
+  <span class="scrSep"></span>
+  <button class="btn" id="scrRun">筛选</button>
+  <button class="btn ghost" id="scrAll">全选/清空</button>`;
+
+  function run(){
+    const checked = [...box.querySelectorAll('input[type=checkbox]:checked')].map(i=>i.value);
+    const logic = box.querySelector('input[name=scrLogic]:checked').value;
+    if(!checked.length){ out.innerHTML = "<p class='sub'>请至少勾选一个模型。</p>"; return; }
+    const hit = {};
+    for(const m of checked){
+      for(const st of scr[m].stocks){
+        const code = st[0], nm = st[1], w = st[2];
+        if(!hit[code]) hit[code] = {name: nm, w: {}};
+        hit[code].w[m] = w;
+      }
+    }
+    let codes;
+    if(logic === 'and'){
+      codes = Object.keys(hit).filter(c => Object.keys(hit[c].w).length === checked.length);
+    } else {
+      codes = Object.keys(hit);
+    }
+    if(!codes.length){
+      out.innerHTML = "<p class='sub'>无满足条件的股票" +
+        (logic==='and' ? "（交集为空，可尝试「或」或减少模型）" : "。") + "</p>";
+      return;
+    }
+    const totalW = c => Object.values(hit[c].w).reduce((a,b)=>a+b,0);
+    codes.sort((a,b) => (Object.keys(hit[b].w).length - Object.keys(hit[a].w).length)
+                        || (totalW(b) - totalW(a)));
+    const rows = codes.map(c => {
+      const h = hit[c];
+      const det = checked.filter(m => h.w[m] !== undefined)
+        .map(m => `<span style="color:${COLORS[m]||'#9aa3b2'}">${m} ${(h.w[m]*100).toFixed(2)}%</span>`)
+        .join(' · ');
+      return `<tr><td><code>${c}</code></td><td>${h.name||''}</td><td>${Object.keys(h.w).length}/${checked.length}</td><td style="text-align:left">${det}</td></tr>`;
+    }).join('');
+    out.innerHTML = `<p class="sub">命中 <b>${codes.length}</b> 只 · 逻辑= ${logic==='and'?'且（交集）':'或（并集）'} · 模型 = ${checked.join(', ')}</p>
+    <table><thead><tr><th>代码</th><th>名称</th><th>命中</th><th style="text-align:left">各模型权重（最新信号日）</th></tr></thead><tbody>${rows}</tbody></table>`;
+  }
+  box.querySelector('#scrRun').addEventListener('click', run);
+  box.querySelector('#scrAll').addEventListener('click', () => {
+    const cbs = [...box.querySelectorAll('input[type=checkbox]:not(:disabled)')];
+    const allOn = cbs.every(i => i.checked);
+    cbs.forEach(i => i.checked = !allOn);
+  });
+  box.querySelectorAll('input[data-auto]').forEach(i => i.addEventListener('change', run));
+  box.querySelectorAll('input[name=scrLogic]').forEach(i => i.addEventListener('change', run));
+  run();
+})();
+</script>
+"""
 
 
 if __name__ == "__main__":
