@@ -281,7 +281,31 @@ def audit_factor(name: str, factor=None, df: pd.DataFrame | None = None,
         else:
             checks["pit"] = {"status": "SKIP", "detail": ["非 registry 因子"]}
     else:
-        checks["pit"] = {"status": "SKIP", "detail": ["quick 模式"]}
+        # quick 模式：IC/PIT 复用旧审查结果（构造未变则历史结论仍有效）。
+        # 2026-09-08 事故：增量审计曾把带 IC 的旧记录覆盖成无 IC 记录，
+        # 导致看板 75 个因子显示"未评"——根因是实现与注释不符（未复用）。
+        old = _read_rec(name)
+        carried_ic = carried_pit = False
+        if old and old.get("audit_version") == AUDIT_VERSION:
+            oc = old.get("checks") or {}
+            ic_old = oc.get("ic") or {}
+            if ic_old.get("ic20") is not None:
+                checks["ic"] = ic_old
+                carried_ic = True
+            pit_old = oc.get("pit") or {}
+            if pit_old.get("status") in ("PASS", "FAIL"):
+                checks["pit"] = pit_old
+                carried_pit = True
+                if pit_old["status"] == "FAIL":
+                    issues.append("PIT 穿越自检 FAIL：截断重算与全量不一致（复用旧审查）")
+                elif pit_old.get("asof_caveat"):
+                    issues.append(f"as-of 缺口：引用快照类表 {pit_old['asof_caveat']}"
+                                  "（复用旧审查）")
+        if not carried_ic:
+            log.warning(f"[audit] {name}: quick 模式且旧记录无 IC，评级将缺失"
+                        "（可跑 scripts/reaudit_ic_backfill.py 补填）")
+        if not carried_pit:
+            checks["pit"] = {"status": "SKIP", "detail": ["quick 模式"]}
 
     if checks["coverage"]["codes_per_day_median"] < 50:
         issues.append(f"截面覆盖中位数仅 {checks['coverage']['codes_per_day_median']} 只")
@@ -355,6 +379,17 @@ def _load_factor_values(name: str) -> pd.DataFrame | None:
         return None
     df["date"] = pd.to_datetime(df["date"])
     return df
+
+
+def _read_rec(name: str) -> dict | None:
+    """读取既有审查记录（容错，供 quick 模式复用 IC/PIT）"""
+    p = AUDIT_DIR / f"{name}.json"
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
 
 
 def _save_rec(rec: dict):

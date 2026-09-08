@@ -85,6 +85,25 @@ def main():
     print(f"报告已生成: {out}")
 
 
+def _latest_snapshot(model: str | None):
+    """取模型最新信号日目标持仓快照（model=None 为生产账本）→ (日期, DataFrame)"""
+    store = Store()
+    if model is None:
+        df = store.q(
+            "SELECT date, code, name, weight FROM signal_portfolio "
+            "WHERE date = (SELECT MAX(date) FROM signal_portfolio)")
+    else:
+        df = store.q(
+            "SELECT date, code, name, weight FROM signal_portfolio_multi "
+            "WHERE model=? AND date="
+            "(SELECT MAX(date) FROM signal_portfolio_multi WHERE model=?)",
+            [model, model])
+    if df.empty:
+        return None
+    df = df.sort_values("weight", ascending=False).reset_index(drop=True)
+    return str(pd.Timestamp(df["date"].iloc[0]).date()), df
+
+
 def render(data_rows, flist, bt3, bt4_eq, bt4_iv, cur, tgt, track, tsum):
     data_tr = "".join(
         f"<tr><td><code>{r['table']}</code></td><td>{r['rows']:,}</td>"
@@ -159,6 +178,29 @@ def render(data_rows, flist, bt3, bt4_eq, bt4_iv, cur, tgt, track, tsum):
         '<th>相对生产</th></tr></thead><tbody>'
         + "".join(cand_rows) + "</tbody></table>")
 
+    # 各模型目标持仓明细（最新信号日快照，折叠展示；2026-09-08 应用户要求加入）
+    from quantlab.decision.tracker import TRACKED_MODELS
+    hold_blocks = []
+    for model in ["PROD"] + [m for m in TRACKED_MODELS if m != "PROD"]:
+        snap = _latest_snapshot(None if model == "PROD" else model)
+        if snap is None:
+            continue
+        d, h = snap
+        rows_html = "".join(
+            f"<tr><td><code>{r['code']}</code></td><td>{r['name']}</td>"
+            f"<td>{r['weight']:.2%}</td></tr>" for r in h.to_dict("records"))
+        desc = TRACKED_MODELS.get(model, "生产模型（与 signal_portfolio 同口径）")
+        hold_blocks.append(
+            f"<details><summary><b>{model}</b>　{len(h)} 只 · 信号日 {d}"
+            f"<span class='muted'>{desc}</span></summary>"
+            "<table><thead><tr><th>代码</th><th>名称</th><th>权重</th></tr></thead>"
+            f"<tbody>{rows_html}</tbody></table></details>")
+    hold_section = (
+        '<h2>八、各模型目标持仓（最新信号日）</h2>'
+        '<p class="sub">每日流水线决策步骤记录的各模型目标持仓，按权重降序，'
+        '点击展开明细。PROD_HFA_W3 仅周三记录（周度调仓口径）。</p>'
+        + "".join(hold_blocks))
+
     return TMPL.format(
         n_factors=len(flist), n_holdings=len(tgt),
         data_tr=data_tr, flist_tr=flist_tr,
@@ -169,7 +211,7 @@ def render(data_rows, flist, bt3, bt4_eq, bt4_iv, cur, tgt, track, tsum):
         bm_ann=f"{bm3['annual_return']:.1%}",
         cur_n=len(cur), tgt_n=len(tgt),
         top10_tr=top10_tr, track_section=track_section,
-        cand_section=cand_section,
+        cand_section=cand_section, hold_section=hold_section,
         payload=json.dumps({**curve, **track_payload}, ensure_ascii=False))
 
 
@@ -203,6 +245,11 @@ code{{font-family:ui-monospace,Consolas,monospace;color:#7fb2e5;}}
 .note{{color:var(--muted);font-size:12px;margin-top:8px;}}
 .layer{{display:inline-block;background:#171a21;border:1px solid #2a2f3a;border-radius:6px;
 padding:2px 10px;font-size:12px;color:#7fb2e5;margin-bottom:16px;}}
+details{{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 16px;margin:10px 0;}}
+summary{{cursor:pointer;font-size:14px;}}
+summary:hover{{color:#7fb2e5;}}
+details table{{margin:10px 0 4px;}}
+.muted{{color:var(--muted);font-size:12px;font-weight:400;margin-left:8px;}}
 </style>
 </head>
 <body>
@@ -261,6 +308,8 @@ padding:2px 10px;font-size:12px;color:#7fb2e5;margin-bottom:16px;}}
 {track_section}
 
 {cand_section}
+
+{hold_section}
 
 <p class="note" style="margin-top:24px">本报告由 QuantLab 五层流水线自动生成（scripts/overview_report.py）。仅供研究，不构成投资建议。</p>
 </div>
