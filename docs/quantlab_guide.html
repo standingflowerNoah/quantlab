@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page-node-id="IstGI0Loyi8izuJ83PMD8j">
+<head data-page-node-id="8BQeIRciB0W8KsA8Zzjexs">
+<meta charset="UTF-8" data-page-node-id="44RjZOc3yp0Xz8G9fje9BR">
+<meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="Al8Ea9EGy0BMAAD6yjsx17">
+<title>QuantLab 量化研究体系 · 合作版讲解材料</title>
+<style>
+:root{
+  --bg:#f6f8fa; --card:#ffffff; --ink:#1f2328; --sub:#57606a; --line:#d0d7de;
+  --blue:#2563eb; --blue-bg:#eff6ff;
+  --l1:#0891b2; --l2:#7c3aed; --l3:#db2777; --l4:#ea580c; --l5:#16a34a;
+  --warn-bg:#fffbeb; --warn-line:#f59e0b;
+  --ok:#16a34a; --bad:#dc2626;
+}
+*{box-sizing:border-box}
+body{font-family:"Microsoft YaHei","PingFang SC","Segoe UI",sans-serif;background:var(--bg);color:var(--ink);margin:0;line-height:1.75;font-size:15px}
+.wrap{max-width:1000px;margin:0 auto;padding:28px 20px 80px}
+h1{font-size:26px;margin:0 0 6px}
+h2{font-size:21px;margin:44px 0 14px;padding-bottom:8px;border-bottom:2px solid var(--line)}
+h3{font-size:16.5px;margin:26px 0 10px}
+p{margin:8px 0}
+.meta{color:var(--sub);font-size:13px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 22px;margin:14px 0}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:760px){.grid2{grid-template-columns:1fr}}
+table{border-collapse:collapse;width:100%;background:#fff;margin:12px 0;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:6px 12px;text-align:left;vertical-align:top}
+th{background:#f0f3f6;font-weight:600;white-space:nowrap}
+code{font-family:Consolas,"JetBrains Mono",monospace;font-size:13px;background:#eef1f4;border-radius:4px;padding:1px 6px}
+pre{font-family:Consolas,"JetBrains Mono",monospace;font-size:12.8px;background:#f6f8fa;border:1px solid var(--line);border-radius:8px;padding:12px 16px;overflow-x:auto;line-height:1.6;margin:10px 0}
+pre .c{color:#6a737d}
+.term{border-left:4px solid var(--l1)}
+.term .tt{font-size:12px;color:var(--sub);margin-bottom:4px}
+.tag{display:inline-block;font-size:12px;border-radius:20px;padding:1px 10px;margin-right:6px;vertical-align:middle}
+.tag.real{background:#dcfce7;color:#166534;border:1px solid #86efac}
+.tag.doc{background:#fef9c3;color:#854d0e;border:1px solid #fde047}
+.note{background:var(--warn-bg);border:1px solid var(--warn-line);border-radius:8px;padding:10px 16px;margin:12px 0;font-size:13.5px}
+.ok-box{background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:10px 16px;margin:12px 0;font-size:13.5px}
+.step{display:flex;gap:14px;margin:18px 0}
+.step .n{flex:0 0 34px;height:34px;border-radius:50%;background:var(--blue);color:#fff;font-weight:700;display:flex;align-items:center;justify-content:center;font-size:16px}
+.step .b{flex:1}
+.svgbox{background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px;margin:14px 0}
+figcaption,.cap{font-size:12.5px;color:var(--sub);text-align:center;margin-top:6px}
+.toc{columns:2;font-size:14px}
+.toc a{color:var(--blue);text-decoration:none}
+.up{color:var(--bad)} .down{color:var(--ok)}
+.small{font-size:12.5px;color:var(--sub)}
+b.hl{background:#fef08a;padding:0 3px;border-radius:3px}
+</style>
+</head>
+<body data-page-node-id="5Z6WQ0OZGWR2ksmdnbocYu">
+<div class="wrap" data-page-node-id="79AgFU1XMyTpPdXYnAZpEy">
+
+<h1 data-page-node-id="mo8wUKNo9aubQhvaHelD5C">QuantLab 量化研究体系讲解</h1>
+<p class="meta" data-page-node-id="L5fj5mTOhzNXm6R9ujJbyn">合作版 · 2026-09-09 · 基于系统实测数据编写 · 覆盖：研究流程 / 系统架构 / 上手演示</p>
+
+<div class="card" data-page-node-id="L5QCIX8T5WBAgxzniFSYqS">
+<p data-page-node-id="ykaa0970rn6MHffPBhjFoR"><b data-page-node-id="UHtAqazAn26Pg9NKxqRily">QuantLab 是什么：</b>一套本地化运行的 A 股量化研究系统——从数据采集、因子计算、模型回测到每日决策信号的<b data-page-node-id="spjlnzjNZ1GlTNPkp4QPcr">五层全链路</b>（L1 数据 → L2 因子 → L3 模型 → L4 优化 → L5 决策），全部通过一条命令行（<code data-page-node-id="iSNC8ZiPMHshFhhMJGqooa">cli.py</code>）驱动，人和 AI 助手共用同一入口。</p>
+<p data-page-node-id="fz6Rc61Nm6g3ugsdSfuLDD"><b data-page-node-id="YiwwDqHu55m0soqQ0IhJrF">当前体量（实测）：</b>日K线 <b data-page-node-id="OlCJHMrY10E2HOrcqktlMu">585 万行</b>（2022-01-04 起）、分钟线湖 <b data-page-node-id="WtZL4J9uiZbroiE5k4QCkc">5.19 亿行</b>、因子库 <b data-page-node-id="uaYJGVDhCMcw1iIqD4pKXZ">12.9 亿行 / 258 个因子</b>、覆盖 1142 个交易日；生产选股模型 <code data-page-node-id="zeuCkiFXO4SBqNSQ0sK2zw">size + amihud_20</code>（年化 32.3% / 夏普 0.98），已进入纸面前向跟踪。</p>
+<p data-page-node-id="TvrSvlbLH2D3BPODD17jrE"><b data-page-node-id="9QmztqEBYNyT8bQRSLAWgx">本材料的三个部分：</b></p>
+<div class="toc" data-page-node-id="TzMLbu4InMxxfhpdLttpnH">
+<ol data-page-node-id="W4Tr0uvkaOuBI7JwIT6FUb">
+<li data-page-node-id="EZyRBFTruz22h9hbKlFGBc"><a href="#p1" data-page-node-id="3GvdpF9fgiwRR3xJEvqhE8">量化研究完整流程</a>——每一步做什么、系统里对应什么</li>
+<li data-page-node-id="D6MpgHCF5mnwIRPrVli1X6"><a href="#p2" data-page-node-id="jJqLSibSkmI2PZM4jLFUDs">系统架构</a>——模块划分、数据流转、工程机制（含架构图）</li>
+<li data-page-node-id="G5d3SxlIBCLNiADZY1fSoX"><a href="#p3" data-page-node-id="PjDs0sfKCWZ3KlRKiNhjJL">上手演示</a>——一个真实因子的完整旅程：8 步从计算到监控</li>
+</ol>
+</div>
+</div>
+
+<!-- ============ PART 1 ============ -->
+<h2 id="p1" data-page-node-id="5jqHhiDQR22OM0ue6iUzEY">第一部分 · 量化研究的完整流程</h2>
+
+<p data-page-node-id="QOteBsZvKT2hLWFXSHIvLE">量化研究不是"想一个策略→跑回测→看赚不赚"，而是一个<b data-page-node-id="0degGtoZfPDJW5CAmL4lzR">可复现、可证伪的闭环</b>。QuantLab 把这个闭环固化成了流程：</p>
+
+<div class="svgbox" data-page-node-id="TaM1twFLPsNZuflMCwUEY0">
+<svg viewBox="0 0 960 300" xmlns="http://www.w3.org/2000/svg" font-family="Microsoft YaHei,sans-serif" data-page-node-id="C4KFqC583mPaq4ZWQERori">
+  <defs data-page-node-id="TbIK1v5zdHIV78MBrx9icb">
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse" data-page-node-id="jwOR09EXJgo67mZi8mx3Ct">
+      <path d="M0,0 L10,5 L0,10 z" fill="#64748b" data-page-node-id="5K7qF8cM5ulcSTmmJ6dMGv"/>
+    </marker>
+  </defs>
+  <!-- 5 stages -->
+  <g font-size="14" text-anchor="middle" data-page-node-id="OG9h10hJxDFODgztzwvJHh">
+    <!-- 1 构思 -->
+    <rect x="20" y="60" width="160" height="90" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5" data-page-node-id="pF7vw0yJ2Ui73aFo20DfW6"/>
+    <text x="100" y="90" font-weight="bold" fill="#1e40af" data-page-node-id="2gQulAWiHg4FlroqOwgUEZ">① 策略构思</text>
+    <text x="100" y="112" font-size="12" fill="#334155" data-page-node-id="YzAEMO0Eg3j5B8Grdkcj1O">文献 / 市场异象</text>
+    <text x="100" y="130" font-size="12" fill="#334155" data-page-node-id="mTzXd8B4VaDnYuOsN2XExF">数据挖掘 · 记入 ideas/</text>
+    <!-- 2 数据 -->
+    <rect x="220" y="60" width="160" height="90" rx="10" fill="#ecfeff" stroke="#0891b2" stroke-width="1.5" data-page-node-id="Jdu74pd3aNOjpF7xls2s5H"/>
+    <text x="300" y="90" font-weight="bold" fill="#155e75" data-page-node-id="gmje6BngLgZZ6Afp4bdDJI">② 数据获取</text>
+    <text x="300" y="112" font-size="12" fill="#334155" data-page-node-id="DJAT9F61zUSOC3CeB3RxkT">多源采集 → 数据湖</text>
+    <text x="300" y="130" font-size="12" fill="#334155" data-page-node-id="L5wqgJVGhsKv7aHKLDRsVW">质量体检 · 缺失回填</text>
+    <!-- 3 因子 -->
+    <rect x="420" y="60" width="160" height="90" rx="10" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5" data-page-node-id="NntNw8ZZ4GebtMAuq3o7RF"/>
+    <text x="500" y="90" font-weight="bold" fill="#5b21b6" data-page-node-id="2NIFWUPVTyPb103HBf6wfc">③ 因子分析</text>
+    <text x="500" y="112" font-size="12" fill="#334155" data-page-node-id="pkaDfW0HwWNu3oxrRWLrRR">IC / ICIR · 分层回测</text>
+    <text x="500" y="130" font-size="12" fill="#334155" data-page-node-id="6xMQ8J04FBauy9HTgxhz2E">去冗余 · 中性化检验</text>
+    <!-- 4 回测 -->
+    <rect x="620" y="60" width="160" height="90" rx="10" fill="#fdf2f8" stroke="#db2777" stroke-width="1.5" data-page-node-id="x92kAwWgz4dau4IV7yQEzv"/>
+    <text x="700" y="90" font-weight="bold" fill="#9d174d" data-page-node-id="botofEAcG18Jlcl9IdeF43">④ 回测验证</text>
+    <text x="700" y="112" font-size="12" fill="#334155" data-page-node-id="3BNJumTdRViUXaNZo9yDSn">多因子合成 · 成本</text>
+    <text x="700" y="130" font-size="12" fill="#334155" data-page-node-id="h7EJW6kvL2nBvhATbKAhgw">walk-forward 样本外</text>
+    <!-- 5 评估 -->
+    <rect x="820" y="60" width="120" height="90" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5" data-page-node-id="EwMK8IoGgGVpYVvYa4PXvL"/>
+    <text x="880" y="90" font-weight="bold" fill="#166534" data-page-node-id="wmMiDyYWDiyKc2qxGH2OJF">⑤ 结果评估</text>
+    <text x="880" y="112" font-size="12" fill="#334155" data-page-node-id="7qvZj0U58dIi6Y7ZuuMGvj">年化/夏普/回撤</text>
+    <text x="880" y="130" font-size="12" fill="#334155" data-page-node-id="5UXhhBhUN7Qcn3tVe6npji">前向账本裁决</text>
+  </g>
+  <!-- arrows -->
+  <g stroke="#64748b" stroke-width="2" marker-end="url(#arr)" data-page-node-id="tUAVPX2kHllTiGrImEDms9">
+    <line x1="180" y1="105" x2="216" y2="105" data-page-node-id="c2Voka1zd1Yr0jAQnbQatF"/>
+    <line x1="380" y1="105" x2="416" y2="105" data-page-node-id="uBdYB54qBQD3YpYrBNic4l"/>
+    <line x1="580" y1="105" x2="616" y2="105" data-page-node-id="jiXzPWL874fnIx5fYpYCfz"/>
+    <line x1="780" y1="105" x2="816" y2="105" data-page-node-id="iKCFouuLkQWQZTqbNzZdC7"/>
+  </g>
+  <!-- feedback loop -->
+  <path d="M880 150 L880 230 L100 230 L100 154" fill="none" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arr)" data-page-node-id="AiETFRO0iyYdQNb9SDn6HB"/>
+  <rect x="380" y="216" width="240" height="28" rx="14" fill="#f1f5f9" stroke="#94a3b8" data-page-node-id="YjW7TpElm888e1b7xXIdW0"/>
+  <text x="500" y="235" font-size="13" text-anchor="middle" fill="#475569" data-page-node-id="4ooJM8NcbapoYTw9bov1A0">未通过 → 迭代：换样本窗 / 改构造 / 否决归档</text>
+  <!-- bottom annotation -->
+  <text x="500" y="280" font-size="13" text-anchor="middle" fill="#64748b" data-page-node-id="n8spT6B089VmcIjzFMJLH8">通过 → 进入每日流水线 + 纸面前向账本，用真实时间检验</text>
+</svg>
+<figcaption data-page-node-id="ehvvK5LNFsg2LIlkSkdyXD">图 1-1 量化研究闭环：五步主流程 + 迭代回路。QuantLab 中每一步都有对应命令与产物。</figcaption>
+</div>
+
+<h3 data-page-node-id="DiluNUylBtGkAvwFd0EF3w">1.1 策略构思：想法从哪来</h3>
+<div class="card" data-page-node-id="WaP7TUc6F2oYw6OeySGfzB">
+<p data-page-node-id="5fALcZUwvji4Cb15pf3gbP">本系统的想法来源有三类，全部落档到 <code data-page-node-id="0kqwReBxzvfBVtDu8HKxxf">research/</code> 目录（想法先进 <code data-page-node-id="zIegqL0vadLPHQVDfr8gnC">research/ideas/</code>，验证后升级为正式研究文档）：</p>
+<table data-page-node-id="F6AEMVe8xyXgfYHq02eCnm">
+<tr data-page-node-id="fSm08kuvlpSlOABsJXmm38"><th data-page-node-id="J0YTysSJ1zS2OSlATzL5QG">来源</th><th data-page-node-id="HO1vgzxAhqJcLjnnz4YebW">例子（本系统真实案例）</th><th data-page-node-id="WCHiT641tSyFndEiqlRw77">结局</th></tr>
+<tr data-page-node-id="FX5gaLpy7vybi700n6PmG9"><td data-page-node-id="wbYnhO9L3Jmgj98cTbdmKN">经典文献 / 异象</td><td data-page-node-id="XuNjlSFPF6M8ASjAxastBv">A 股小市值溢价、低流动性溢价（Amihud）、短期反转、低波动异象</td><td data-page-node-id="merCdBqULW3Mo0DXTK2Fk7"><b data-page-node-id="OUXj6BvDNEKak7bMCvrG75">通过</b>，构成生产模型 size+amihud_20</td></tr>
+<tr data-page-node-id="OcuDdfRI7GlH4d2XsDM4ko"><td data-page-node-id="3lRP80l4sKZopIYGSVVMYa">券商金工研报</td><td data-page-node-id="afGWHsFe3VlVa4wQPLspEx">国泰君安 Alpha191 短周期价量因子（191 个）；方正/开源高频"聪明钱"因子</td><td data-page-node-id="VkhhYiXPvFWe9VS9JSO2q4">因子层有效，<b data-page-node-id="tlXYWru4zVvJ8ovnzzBfAR">组合层被否</b>（见 1.5）</td></tr>
+<tr data-page-node-id="cTRaBeKmdR2yCpUuFNlgBG"><td data-page-node-id="b9ge1zJ4oQnVVFXkUluqCr">自主数据挖掘</td><td data-page-node-id="m9vr97pGYG6F1CFATuWAFl">龙虎榜净买入因子 dragon_net_20、分红事件套利、因子拥挤度择时</td><td data-page-node-id="hW15DoEdjdm4VrbPXTDglp">多个<b data-page-node-id="dk7CE0j34f1jrHMirGTMPr">负面结论</b>，如实归档</td></tr>
+</table>
+<p class="small" data-page-node-id="IyRKebKbVZo3e28X0Zvv2H">原则：先想清楚"这个信号为什么应该在统计上存在"（行为偏差 / 制度约束 / 风险补偿），再动手验证——避免纯数据挖掘出的过拟合幻觉。</p>
+</div>
+
+<h3 data-page-node-id="Hf5nAjtGkTJDPRp0ByDkur">1.2 数据获取：湖仓一体 + 质量闸门</h3>
+<div class="card" data-page-node-id="2eZ3Zx2RwoEOUTo5T3IlaB">
+<p data-page-node-id="KHKkBDlCGnGzDhlgnSHSkC">QuantLab 接了 10+ 个免费数据源（通达信 / 东财 / 腾讯 / 新浪 / 同花顺 / free-stockdb 等），统一落到本地<b data-page-node-id="FxrXxAyivYOhT0EyrJL2I1">数据湖</b>。研究默认股票池 <code data-page-node-id="yiLEThGtOHfCNGJflN7XU4">ashare_ex</code>（全 A 剔除 ST / 次新&lt;120日 / 北交所）。</p>
+
+<p data-page-node-id="fQeHXfSAaUfFsiGCeQtxNa">实时查看数据家底（<span class="tag real" data-page-node-id="murjJBG7hMvJiH6qrd5ypE">实测输出 2026-09-09</span>）：</p>
+<pre class="term" data-page-node-id="CGO1GkjlGKlnAjDzsFC5hl">$PY cli.py universe
+   universe  n_stocks
+        all      5556      <span class="c" data-page-node-id="tMSHku9LG7mF3gpIj8Tdic">← 全部 A 股</span>
+  ashare_ex      5014      <span class="c" data-page-node-id="AvYUCiK8bWZ7L3tR8FbzSQ">← 研究默认池（研究标配）</span>
+    hs300       300
+    zz1000     1000       <span class="c" data-page-node-id="VJ6VLl3j7uR84OILsKmryU">← 指数成分池（东财，周更）</span>
+
+$PY cli.py query "SELECT COUNT(*) n, MIN(date) d0, MAX(date) d1 FROM kline_daily"
+        n         d0         d1
+  5849785  2022-01-04  2026-09-07   <span class="c" data-page-node-id="CCIl5rS31v5L9u1cscDMD2">← 585 万行日K，四年半</span></pre>
+
+<p data-page-node-id="DJrikW1XdBsOyTtI8rDHkJ"><b data-page-node-id="ixAbFUF0TgqlBgk0akWFD8">质量闸门：</b>每日更新后自动跑 <code data-page-node-id="OQFkhzWymVeOvnWYS8PybE">data quality</code> 体检（完整性 / 新鲜度 / 合理性 / 一致性 / 复权抽样 5 类），FAIL 会阻塞下游因子与决策步骤——<b data-page-node-id="3Zylk5fYMFjZezsUyocV0G">脏数据进不了研究链路</b>。</p>
+<div class="note" data-page-node-id="8nBaArjVHFLp47qXHcQY5C">📌 实用细节：kline_daily 的 <code data-page-node-id="RoWtxQjzNYU11sAcNEyDPw">vol</code> 单位是<b data-page-node-id="7WlWZqMVza6vlOXGspFaUd">股</b>、<code data-page-node-id="LbrxYQiGjNshalHzBBdawg">amount</code> 单位是<b data-page-node-id="gZo0JjX3bLIfZDTZWC6HhM">元</b>；价格<b data-page-node-id="YYCwSwi4AACYIaAIaF0dLQ">不复权</b>，复权要用系统内置的复权因子引擎（因子 SQL 里的 <code data-page-node-id="XCmxLnG7lg8dZAHBqCaoRy">QFQ_CLOSE</code> 片段）。涉及分红的收益计算必须用前瞻窗口加回分红。</div>
+</div>
+
+<h3 data-page-node-id="1ywQKIysznjAc9cun0CBPW">1.3 因子分析：IC + 分层回测 + 去冗余</h3>
+<div class="card" data-page-node-id="oJg0q7SDiTUZYMpn6HxRE8">
+<p data-page-node-id="uwBSBqcuu6Q10n7DUN8ZG2">因子是系统的核心资产。统一契约：<b data-page-node-id="HYtL3IUXVrK7pDhqQjX5XO">长格式 <code data-page-node-id="ED8VVj4CV3ta3PNFD7zGKU">date / code / value</code></b>，Parquet 按年分区落湖（<code data-page-node-id="Gg0Wtpkh9FRggviIOcxIBS">data/lake/factor/&lt;name&gt;/</code>），这样任何因子都能用同一套评估代码处理。</p>
+<p data-page-node-id="yWWpY4ENn8vqu8ThuoESMI"><b data-page-node-id="ZuHjljYRgW28pJKCZAh9jy">三个标准评估动作：</b></p>
+<table data-page-node-id="cR5vXx9MgEjAuUPUc0Fhmo">
+<tr data-page-node-id="1Nuvm3P6ak4OYZulcCmLpj"><th data-page-node-id="FRzEG3C7aKZuYfyD0sbZYU">动作</th><th data-page-node-id="tyr81OtF330OSsbA9IF2YF">命令</th><th data-page-node-id="2FMSdvox7QQtjkIshC5RKm">回答什么问题</th></tr>
+<tr data-page-node-id="XPNeJwqFMFYAx2uWKtpQqN"><td data-page-node-id="4Q6ty0Qc0R97nZrw2dIkRy">IC 评估</td><td data-page-node-id="e5tQC8TPcopHLFEhNF3QXS"><code data-page-node-id="lbyQhqOC08Vlb6AU8FNEWO">factor summary &lt;name&gt; --horizon 20</code></td><td data-page-node-id="VaiP5T58obcpYH1cJ3HwUc">因子值与未来收益的截面秩相关（Spearman）是否显著？ICIR（IC均值/IC波动）是否稳定？</td></tr>
+<tr data-page-node-id="bKpgkxpKyhHEQ6BDlAbRYi"><td data-page-node-id="EEWwHyvYd95cw9R0mmNdzG">分层回测</td><td data-page-node-id="PEGeEqhal6HJy5gH0peha8"><code data-page-node-id="gmDgVpg5dgSZUYHFdhL44T">factor backtest &lt;name&gt; --horizon 20 --quantiles 5</code></td><td data-page-node-id="VBCMsdrXFRauTSeQDmnEER">按因子值分 5 层，各层收益是否<b data-page-node-id="GIznBW116OVyVoYTlI1TWq">单调</b>？多空两端差多少？（非重叠持有期，避免复利虚高）</td></tr>
+<tr data-page-node-id="9VWRyuof4TJQVQJTGXHgBW"><td data-page-node-id="mURV5CGaRuroVOQ2tfAtBs">去冗余</td><td data-page-node-id="WNqSCSBxi91sv0BzjKaboe"><code data-page-node-id="i2THAL2AsLAGGoqWUdSoAY">factor corr</code></td><td data-page-node-id="B12ffxuLCBU8daInG1Jja5">与已有因子的相关性矩阵，相关&gt;0.9 的只留 ICIR 最高的一个</td></tr>
+</table>
+<p data-page-node-id="RwLkiWJ07XlAqeSEcXnMv4"><b data-page-node-id="FdOsTMZfoXBezTUb8Bgq7U">实测基准</b>（2022-01 ~ 2026-09，ashare_ex，<span class="tag doc" data-page-node-id="Q4E64EfSBpYxatseyQB81x">系统实测记录</span>）：</p>
+<table data-page-node-id="8Q5f0b9hyonyoP5caIswWm">
+<tr data-page-node-id="CWFDCDa0Aw37R402IM9QeY"><th data-page-node-id="3xttXvuCMK5A346BDGLoeG">因子</th><th data-page-node-id="cpTNkqhd3IEPNTaQxPcDPE">IC(20日)</th><th data-page-node-id="cWn61giYpgedbafA33lsGs">多空年化(h=20)</th><th data-page-node-id="nfc8pGWKS7wBv1SAU5Uusr">解读</th></tr>
+<tr data-page-node-id="NXO7180Pk0IY52DoL2UpuU"><td data-page-node-id="A3H6o8b9bsK4INwOayhSF1"><code data-page-node-id="KDDCf5Ma7YjermJ7XDQld9">reversal_10</code></td><td data-page-node-id="y7cPIchmfeQlsVebwpQHCE">+0.062</td><td class="up" data-page-node-id="RtfztzKTJs1kzI8HhLJi7J">+13.8%（reversal_5 口径）</td><td data-page-node-id="KEgmChSCdKbHuUNLkhG5M3">短期反转：跌多了会反弹</td></tr>
+<tr data-page-node-id="4ii8I2jmlhwEvG3KoT9UWY"><td data-page-node-id="XAYyczjKqwIYKAAgbEnPTl"><code data-page-node-id="lJTwgoFU8dmgYhHgCavtPx">size</code></td><td data-page-node-id="IDtgfbQn5lOzR0dj2ppvNC">−0.053</td><td class="up" data-page-node-id="Sa3mvIQJyoVaIPzcBFik0S">−19.6%</td><td data-page-node-id="8jqX1FsyWI2LYgcdDpSQs4">小市值溢价（负号=做多低值）</td></tr>
+<tr data-page-node-id="rjgB68s4m3yX8SWt9IEkma"><td data-page-node-id="SwlxAHaSHEaeQC0FOTvkOC"><code data-page-node-id="QtJKqDaJhCaTD0SAdSQbJ9">turnover</code></td><td data-page-node-id="DnivJEZnWLZFaI4t6iiGrB">−0.095</td><td class="up" data-page-node-id="HxL5aC0qMRFvyQFxtgGdUZ">−17.2%</td><td data-page-node-id="NeHDhIbvCUpvoF8KwmINov">低换手溢价</td></tr>
+<tr data-page-node-id="QhAWRbhYrBKvWD4jjEB4nf"><td data-page-node-id="4xLtcKLHVWHoEHLuwYXpYD"><code data-page-node-id="dSMZX7IOgHJLt1NJ9kyD54">volatility_20</code></td><td data-page-node-id="3s7STvc5lEWJDfVI8BozfM">−0.092</td><td class="up" data-page-node-id="HQOaGmhzfUqoxCWr2zLrDV">−9.0%</td><td data-page-node-id="zJJZntJVnt3ZkGI761pffU">低波动异象</td></tr>
+</table>
+<p class="small" data-page-node-id="l7mm2qIZNswKY6qwtlmy1o">全部符合 A 股经典实证规律——这批"老因子"是判断新因子是否只是风格代理的参照系。</p>
+</div>
+
+<h3 data-page-node-id="fDikkYTvBqvEmxEZ8h5bCG">1.4 回测验证：多因子合成 + walk-forward 硬约束</h3>
+<div class="card" data-page-node-id="6YKXRHRXsQVzgzM1aAmknO">
+<p data-page-node-id="9nOQzP5MTWxZ3KHvdBIlRX">单个因子有效 ≠ 组合有效。合成流程（<code data-page-node-id="dI9DltZwVTcQIqpp9wRZtV">cli.py model backtest</code>）：</p>
+<ol data-page-node-id="7WWqnJFDG0ycJbHBFG5YiS">
+<li data-page-node-id="t7FdcR2mqvmtVSWVGSXZfG">每日截面把因子值 <b data-page-node-id="sIERBgmHwvhOKaLhWMtOtT">rank 标准化到 [0,1]</b>（抗异常值）</li>
+<li data-page-node-id="fapEah8Vb8gVAVhcSI4Gx7"><b data-page-node-id="H2NtFsOttvYEuleY5FEayU">方向校正</b>：负 IC 因子取反（如 size 做多低值）——<b data-page-node-id="8LA9viW9HykDcfgDzpzELV">手工合成必须带 FACTOR_DIRECTION，漏了结论会失真</b></li>
+<li data-page-node-id="fL6IREZkDCIt4Fwh3G7KEw">等权/加权合成综合评分 → 取 top N 等权持有，20 日调仓</li>
+<li data-page-node-id="nrBygVUSFaBkRwTDZltpx4"><b data-page-node-id="oz8B5VtmMfpD4ISeVA33rG">扣真实成本</b>：佣金 + 印花税 + 滑点</li>
+</ol>
+<div class="ok-box" data-page-node-id="0otCF88sW3qMMazOzVDwSh"><b data-page-node-id="mwA47VBOh86so8Q7jAfK9I">本系统的硬约束：策略上线前必须通过样本外 / walk-forward 滚动验证。</b>
+即"训练窗滚动前移、只评估从未见过的样本外区间"。历史上多次出现<b data-page-node-id="3nyuJwPP72h8ObGXorMNiC">全样本漂亮、样本外塌掉</b>的案例（如 overnight_mom_20 单腿 2024 年 −5.3% vs 全期 +6.7%），全被这个闸门拦下。</div>
+</div>
+
+<h3 data-page-node-id="qipTQYvglSShbW2XIuEZs1">1.5 结果评估：绩效指标 + 双闸门 + 诚实归档</h3>
+<div class="card" data-page-node-id="L436b1bNwSqfWD4lGoXQdZ">
+<p data-page-node-id="DWjxCnSn0ByBxQM9G4a2Rg"><b data-page-node-id="L84ejFjbk4KwO2yvG3Hl82">指标体系：</b>年化收益 / 超额年化（vs 中证1000）/ 夏普 / IR / 最大回撤 / 换手率 / 容量（持仓 ADV 占比）。</p>
+<p data-page-node-id="ASB3KDMH5B99BmEZksKAKp"><b data-page-node-id="Tk5ae0W67szF5uyZ9q7XC4">关键教训——"因子层通过 ≠ 组合层可用"（双闸门）：</b></p>
+<table data-page-node-id="5EvjgYowYFJnVRfM0VB6sy">
+<tr data-page-node-id="xZsdfGF8svvr98GTDWzfv0"><th data-page-node-id="YRqXAHFiCQ1DYcVQyL0Vhu">案例</th><th data-page-node-id="EOphbbMAaoJBOKwSz8X6qt">因子层 WF</th><th data-page-node-id="ZkYFiZg1mfDBvojqKKaQal">组合层 A/B</th><th data-page-node-id="sDpVvN0VpAiDI8hDdKtNnr">结论</th></tr>
+<tr data-page-node-id="WyrpGbvtUC3vSiHNXwTA5W"><td data-page-node-id="EPWdZHoVLGUiHKWnT2I5HH">Alpha191 合成 a191_wf_composite</td><td data-page-node-id="bDXFepQKDJhHgGxjGNa5id">✅ OOS ICIR 0.55</td><td data-page-node-id="vc1kn7s4wt5jBKWnVakof8">❌ 全部跑输生产组合（focus −11.8pp）</td><td data-page-node-id="1DjWNPmG78SEueL0stnWWg">截面正交 ≠ 选股边际贡献；卫星弱于主组合必稀释</td></tr>
+<tr data-page-node-id="JfCwucCCiFDRbhnweJ0lgd"><td data-page-node-id="zmWmfgH2p2gq46fPQ7TitL">高频合成 hf_wf_composite</td><td data-page-node-id="56Zgilkr7uxuxQPdmardaC">✅ OOS ICIR 0.41</td><td data-page-node-id="c6WWDsUQZwxlPwlUeQXZG8">❌ 不进实盘加权</td><td data-page-node-id="Ng2zHIMlwig57CNQwDA9hv">留库前向跟踪，24+ OOS 月后复评</td></tr>
+<tr data-page-node-id="2kiw6sEpOLHjLcKaJLHuTh"><td data-page-node-id="zkNulScavDfN7XycHWF6T2">dragon_net_20</td><td data-page-node-id="SjwozuhIhRbmxvLe0EQxKS">—（ICIR 虚高 2.3）</td><td data-page-node-id="EdJgMaYTgpkqC0UHUhFac3">—</td><td data-page-node-id="m8zKBdNnsCIy11X5ikJgYR"><b data-page-node-id="i7yKVNFdUtzLcg9Zs2ijmt">前视 bug</b>：t 日值含未来事件。回测年化 45.7% 作废回退，修复后实测负 IC</td></tr>
+</table>
+<p class="small" data-page-node-id="SMFGGqGRXDxyXtknI50wFb">这套"负面结论如实归档"的机制是系统最重要的资产之一：<code data-page-node-id="CpLSNHGaGxFTKWKDTOdWDj">research/</code> 下的每份研究文档都记录了证伪过程，避免后人重走弯路。</p>
+</div>
+
+<!-- ============ PART 2 ============ -->
+<h2 id="p2" data-page-node-id="OGCZ7IudIG9FNs8bctjxOT">第二部分 · 系统架构</h2>
+
+<h3 data-page-node-id="tmGP5bBjPAzfmigDTan38K">2.1 五层架构总览</h3>
+<div class="svgbox" data-page-node-id="G8sHadUY1cL94gaIEnEUOD">
+<svg viewBox="0 0 960 520" xmlns="http://www.w3.org/2000/svg" font-family="Microsoft YaHei,sans-serif" data-page-node-id="ekHSAyKtu5ulXunqQSkQDK">
+  <defs data-page-node-id="OKzw7DtfHgdOsmPUADBHa2">
+    <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse" data-page-node-id="XHw7FI3I0rFJh4rG8nNYs6">
+      <path d="M0,0 L10,5 L0,10 z" fill="#64748b" data-page-node-id="Oos1cR5L7ETEcEV6fUs3q6"/>
+    </marker>
+  </defs>
+  <!-- data sources -->
+  <g font-size="12" data-page-node-id="xPYrWs2DwAB1nvsAYj4YXS">
+    <rect x="20" y="20" width="920" height="58" rx="8" fill="#f8fafc" stroke="#cbd5e1" data-page-node-id="Grl3X5iSKpkjbT8eMdVOAS"/>
+    <text x="40" y="45" font-weight="bold" fill="#475569" font-size="13" data-page-node-id="SBAcFfMByBeJP1ZsZH7LhS">外部数据源（免费渠道）</text>
+    <text x="40" y="66" fill="#64748b" data-page-node-id="DGibe0Hiax5us0DqEMduAQ">通达信 TCP · 东财 datacenter · 腾讯行情 · 新浪 · 同花顺 · free-stockdb 分钟镜像 · 自维护交易日历</text>
+  </g>
+  <line x1="480" y1="78" x2="480" y2="108" stroke="#64748b" stroke-width="2" marker-end="url(#arr2)" data-page-node-id="SYmjMxjpZ7iBy49Mvppe8B"/>
+  <text x="600" y="98" font-size="12" fill="#64748b" data-page-node-id="Dilwgbvgdh2tZrXnjF8QoD">sources/ 适配器统一采集 → update.py 调度</text>
+
+  <!-- L1 -->
+  <g data-page-node-id="yhIjzuoP5Lj1OCYmLChXok">
+    <rect x="20" y="110" width="920" height="76" rx="10" fill="#ecfeff" stroke="#0891b2" stroke-width="1.6" data-page-node-id="Dfgmbn5U6AN0CLWLXFDw36"/>
+    <rect x="20" y="110" width="8" height="76" rx="4" fill="#0891b2" data-page-node-id="BTpnX4PntwFVB8jZ51gljt"/>
+    <text x="44" y="136" font-weight="bold" font-size="15" fill="#155e75" data-page-node-id="HSCFQJZ3LQDHe2Gk6xH1YN">L1 数据层　quantlab/data/</text>
+    <text x="44" y="158" font-size="12.5" fill="#334155" data-page-node-id="4tEumTBnHL9MeEg8WsStCD">store.py（DuckDB 引擎+Parquet 镜像）· kline.py（K线+复权因子）· universe.py（多股票池）</text>
+    <text x="44" y="176" font-size="12.5" fill="#334155" data-page-node-id="fRKsx0bxqlf5VGp6J2ZpDL">quality.py（数据体检）· update.py（日度调度）· calendar.py / instruments.py / financial.py</text>
+  </g>
+  <line x1="480" y1="186" x2="480" y2="212" stroke="#64748b" stroke-width="2" marker-end="url(#arr2)" data-page-node-id="k0DMZitQGethjTm9FNznq7"/>
+
+  <!-- L2 -->
+  <g data-page-node-id="gMK72jTLVUtLy1QybcL9Qc">
+    <rect x="20" y="214" width="920" height="76" rx="10" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.6" data-page-node-id="vY8VFbfvU8hFIdpGM7xi11"/>
+    <rect x="20" y="214" width="8" height="76" rx="4" fill="#7c3aed" data-page-node-id="oix5FE2AU35IDljffv8Fdo"/>
+    <text x="44" y="240" font-weight="bold" font-size="15" fill="#5b21b6" data-page-node-id="IGGU1zyue7T6RuygXp8dGH">L2 因子层　quantlab/factor/</text>
+    <text x="44" y="262" font-size="12.5" fill="#334155" data-page-node-id="cooSZm2UAsV0iXPnna79g5">base.py（Factor/SqlFactor 基类）· registry.py（@register 注册表）· compute.py（计算入口）· quality.py（IC/ICIR）</text>
+    <text x="44" y="280" font-size="12.5" fill="#334155" data-page-node-id="TIkLgu3AtzdCGPusiPhAsB">library/（258 个因子实现）· alpha191.py（Alpha191 独立引擎）· crowding.py（拥挤度监控）· 高频因子 pipeline</text>
+  </g>
+  <line x1="480" y1="290" x2="480" y2="316" stroke="#64748b" stroke-width="2" marker-end="url(#arr2)" data-page-node-id="CINq43j8YOh0zkjAosPBk1"/>
+
+  <!-- L3 + L4 side by side -->
+  <g data-page-node-id="AenGBAEQUzOsMnEdvs8Mkb">
+    <rect x="20" y="318" width="450" height="76" rx="10" fill="#fdf2f8" stroke="#db2777" stroke-width="1.6" data-page-node-id="BYelhCOkDVwoP4LF7hiHRR"/>
+    <rect x="20" y="318" width="8" height="76" rx="4" fill="#db2777" data-page-node-id="EeugOu4cJoYGIPpP4UyAfR"/>
+    <text x="44" y="344" font-weight="bold" font-size="15" fill="#9d174d" data-page-node-id="jGj3kn44aZqvvgGMWmYiqC">L3 模型层　quantlab/model/</text>
+    <text x="44" y="366" font-size="12.5" fill="#334155" data-page-node-id="Gdlc3XCzZkwk5fFCxeSpFe">composite.py（rank 合成+方向校正+审查闸门）</text>
+    <text x="44" y="384" font-size="12.5" fill="#334155" data-page-node-id="UgSwHRfaqhoRgF3HA2GtoY">backtest.py（选股回测+成本）· pool_select.py（生产评分入口）</text>
+    <line x1="470" y1="356" x2="506" y2="356" stroke="#64748b" stroke-width="2" marker-end="url(#arr2)" data-page-node-id="xPj8EknsusibnXuMENvMA0"/>
+  </g>
+  <g data-page-node-id="D0IEQmSnQWC4GZnBARCmar">
+    <rect x="510" y="318" width="430" height="76" rx="10" fill="#fff7ed" stroke="#ea580c" stroke-width="1.6" data-page-node-id="pTgwWDChUvagNRpaOCMAfy"/>
+    <rect x="510" y="318" width="8" height="76" rx="4" fill="#ea580c" data-page-node-id="REBEDY92C7OrcsFElPWd5t"/>
+    <text x="534" y="344" font-weight="bold" font-size="15" fill="#9a3412" data-page-node-id="F5vlglKO0KLuKmacBsKs2V">L4 优化层　quantlab/optimize/</text>
+    <text x="534" y="366" font-size="12.5" fill="#334155" data-page-node-id="vzrECKihvzBTfoI6fTEEWM">等权 / 逆波动 / 最小方差 / 风险平价</text>
+    <text x="534" y="384" font-size="12.5" fill="#334155" data-page-node-id="A9LxAdctA0y2AfliC20c7G">权重方案回测对比（纯 numpy 实现）</text>
+  </g>
+  <line x1="480" y1="394" x2="480" y2="420" stroke="#64748b" stroke-width="2" marker-end="url(#arr2)" data-page-node-id="Jy2UkV6Z24PlvDP8Q4GrMB"/>
+
+  <!-- L5 -->
+  <g data-page-node-id="8jAIJEfdYoZufCMYFNJ4B0">
+    <rect x="20" y="422" width="920" height="76" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.6" data-page-node-id="TCpVO2nBovJafXJaESHWA7"/>
+    <rect x="20" y="422" width="8" height="76" rx="4" fill="#16a34a" data-page-node-id="KBgExT2wMlOJu9gIak7Ger"/>
+    <text x="44" y="448" font-weight="bold" font-size="15" fill="#166534" data-page-node-id="Gv6rV36psVMHRfFmTMJKva">L5 决策层　quantlab/decision/</text>
+    <text x="44" y="470" font-size="12.5" fill="#334155" data-page-node-id="TDOMtonU7Ho3oI1xIlD6oE">评分→信号→调仓清单闭环 · 风控（个股≤5% / 行业≤30% / 可成交性约束）· 持仓状态持久化 portfolio_state/</text>
+    <text x="44" y="488" font-size="12.5" fill="#334155" data-page-node-id="uVvi8yHqMEkDtDTo0l9l1T">纸面前向账本 signal_portfolio → forward_monitor.py 前向净值报告</text>
+  </g>
+</svg>
+<figcaption data-page-node-id="Y43orG0JLPvK2mOExzl4dW">图 2-1 五层架构：每一层只依赖下一层的产物，层内模块职责单一。</figcaption>
+</div>
+
+<h3 data-page-node-id="yTD5QsnRa6zd4L68eRaZMM">2.2 数据流转：湖为中心，Parquet 是唯一事实源</h3>
+<div class="svgbox" data-page-node-id="36nUbZzv5tC0sFrpeCuUdt">
+<svg viewBox="0 0 960 430" xmlns="http://www.w3.org/2000/svg" font-family="Microsoft YaHei,sans-serif" data-page-node-id="53xDt62emTCNUCPIRwZiG2">
+  <defs data-page-node-id="T8Pbvq90bFzfsAbFOxGxd6">
+    <marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse" data-page-node-id="4SZC7am8HV8sUq3eTmL6RK">
+      <path d="M0,0 L10,5 L0,10 z" fill="#64748b" data-page-node-id="3pz38e8KVBxQhJkI2tUBUD"/>
+    </marker>
+  </defs>
+  <!-- lake center -->
+  <rect x="330" y="130" width="300" height="170" rx="14" fill="#0f172a" data-page-node-id="HN1sp2IDMNSlUyiyPeSHsT"/>
+  <text x="480" y="162" text-anchor="middle" fill="#7dd3fc" font-size="16" font-weight="bold" data-page-node-id="5LJPqgDetydtrUmPBORzG2">数据湖 data/lake/</text>
+  <g font-size="12.5" fill="#cbd5e1" data-page-node-id="VcBIQVumtaYqK3E6wtVxd5">
+    <text x="480" y="190" text-anchor="middle" data-page-node-id="SvakafhnWn2mDjFnCacqF5">clean/　行情与特征镜像（日K/分钟/财务…）</text>
+    <text x="480" y="212" text-anchor="middle" data-page-node-id="ISPrfBIwiXGR6C7ieFem5q">factor/　因子库（date/code/value 长表，按年分区）</text>
+    <text x="480" y="234" text-anchor="middle" data-page-node-id="ZyAAniXzBGeALPzcT6VDiZ">factor_audit/　258 个因子审查档案（JSON）</text>
+    <text x="480" y="262" text-anchor="middle" fill="#94a3b8" data-page-node-id="ovDO1RAACv6GBBPV90Obtt">Parquet = source of truth</text>
+    <text x="480" y="282" text-anchor="middle" fill="#94a3b8" data-page-node-id="H2z7PVoC4PAIcbloj20C2P">quant.duckdb = 可替换查询加速层（单写者）</text>
+  </g>
+  <!-- left: sources -->
+  <rect x="30" y="40" width="200" height="80" rx="10" fill="#fff" stroke="#94a3b8" data-page-node-id="QuWbk90VKCJOO9cQE8YAO6"/>
+  <text x="130" y="70" text-anchor="middle" font-size="13" font-weight="bold" fill="#334155" data-page-node-id="LuQUIC46Qwy1y6mGwHibhJ">外部源采集</text>
+  <text x="130" y="92" text-anchor="middle" font-size="11.5" fill="#64748b" data-page-node-id="umPhWl3bXJ1RbYEAxqs1NA">通达信/东财/腾讯/新浪/同花顺</text>
+  <text x="130" y="108" text-anchor="middle" font-size="11.5" fill="#64748b" data-page-node-id="UOzpABMoex7h8AB1QATpav">free-stockdb 分钟镜像</text>
+  <line x1="230" y1="80" x2="326" y2="150" stroke="#64748b" stroke-width="2" marker-end="url(#arr3)" data-page-node-id="L7bD82619G3HZu83RsTOQk"/>
+  <text x="255" y="105" font-size="11.5" fill="#64748b" data-page-node-id="k92HherIRCKKDIwnodhhbm">data update</text>
+
+  <!-- left-bottom: quality -->
+  <rect x="30" y="300" width="200" height="70" rx="10" fill="#fffbeb" stroke="#f59e0b" data-page-node-id="KA3CCuGJ7nkVCgpykOXKPz"/>
+  <text x="130" y="328" text-anchor="middle" font-size="13" font-weight="bold" fill="#92400e" data-page-node-id="zNHgUbOrzGnQmu0LHVjc0x">质量闸门 quality.py</text>
+  <text x="130" y="350" text-anchor="middle" font-size="11.5" fill="#78350f" data-page-node-id="GegvoU2SVv6riJhPT5nZTD">完整性/新鲜度/一致性</text>
+  <text x="130" y="364" text-anchor="middle" font-size="11.5" fill="#78350f" data-page-node-id="zXewKAL3I74h3dLtQ3Xoa6">FAIL → 阻塞下游</text>
+  <line x1="330" y1="285" x2="234" y2="320" stroke="#b45309" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arr3)" data-page-node-id="FhCWUBpnMdWWxHytAsQMRZ"/>
+
+  <!-- right: factor -->
+  <rect x="700" y="40" width="220" height="72" rx="10" fill="#f5f3ff" stroke="#7c3aed" data-page-node-id="dhEQtJktCAyQLDMFqNn0fC"/>
+  <text x="810" y="68" text-anchor="middle" font-size="13" font-weight="bold" fill="#5b21b6" data-page-node-id="nFY9smpnRUDr2D3S5pFY3U">因子计算 compute.py</text>
+  <text x="810" y="88" text-anchor="middle" font-size="11.5" fill="#64748b" data-page-node-id="w3mof4vrT0X6kcUQMeTvQq">SQL 窗口函数一次算全市场</text>
+  <text x="810" y="104" text-anchor="middle" font-size="11.5" fill="#64748b" data-page-node-id="AtJvB8Oo0GpZxhjC834ReP">幂等写盘 + 构建即审查</text>
+  <line x1="634" y1="150" x2="696" y2="85" stroke="#64748b" stroke-width="2" marker-end="url(#arr3)" data-page-node-id="91SfDIqhHzZ8nfIzjmrNrN"/>
+  <line x1="700" y1="112" x2="640" y2="170" stroke="#64748b" stroke-width="2" marker-end="url(#arr3)" opacity="0.5" data-page-node-id="vvHAnEwI2cB6QyNZOHWH2U"/>
+
+  <!-- right mid: model -->
+  <rect x="700" y="150" width="220" height="72" rx="10" fill="#fdf2f8" stroke="#db2777" data-page-node-id="k8I3RHWI3ybanXZg9wpdvI"/>
+  <text x="810" y="178" text-anchor="middle" font-size="13" font-weight="bold" fill="#9d174d" data-page-node-id="uZKOymFDUStSFEun3wrzaC">模型合成 pool_select.py</text>
+  <text x="810" y="198" text-anchor="middle" font-size="11.5" fill="#64748b" data-page-node-id="orQz3gRteyYsKpAfdsvWFn">rank 合成 + 方向校正</text>
+  <text x="810" y="214" text-anchor="middle" font-size="11.5" fill="#64748b" data-page-node-id="kpNOWtyfXa6mCsMy34jy2T">引用 FAIL 因子直接拒绝</text>
+  <line x1="634" y1="205" x2="696" y2="190" stroke="#64748b" stroke-width="2" marker-end="url(#arr3)" data-page-node-id="YHLTZhlLgDSb9xQqpPQO1d"/>
+
+  <!-- right bottom: decision & reports -->
+  <rect x="700" y="260" width="220" height="72" rx="10" fill="#f0fdf4" stroke="#16a34a" data-page-node-id="yAWw9o619tTqO11i9a8F8M"/>
+  <text x="810" y="288" text-anchor="middle" font-size="13" font-weight="bold" fill="#166534" data-page-node-id="5aRN0zCal7JXObznjz3t0j">决策 + 前向账本</text>
+  <text x="810" y="308" text-anchor="middle" font-size="11.5" fill="#64748b" data-page-node-id="EmXwIyqltW9w0GOpJKJcxp">portfolio_state/current.json</text>
+  <text x="810" y="324" text-anchor="middle" font-size="11.5" fill="#64748b" data-page-node-id="fsHjRYfFgzYlSIrhVhRlBN">signal_portfolio 快照 → forward_monitor</text>
+  <line x1="634" y1="260" x2="696" y2="285" stroke="#64748b" stroke-width="2" marker-end="url(#arr3)" data-page-node-id="TzkVManGFFYal7IaK1kA3L"/>
+
+  <!-- right far: reports -->
+  <rect x="700" y="360" width="220" height="56" rx="10" fill="#fff" stroke="#94a3b8" data-page-node-id="9r8fXAX00OMzUFWdJblPrv"/>
+  <text x="810" y="382" text-anchor="middle" font-size="13" font-weight="bold" fill="#334155" data-page-node-id="Rqf7qlWQVBfi11cum8grAq">报告与推送</text>
+  <text x="810" y="402" text-anchor="middle" font-size="11.5" fill="#64748b" data-page-node-id="zXtn1EmsWQocfQLJCCAn2C">overview / dashboard / audit HTML + 企微推送</text>
+  <line x1="810" y1="332" x2="810" y2="356" stroke="#64748b" stroke-width="2" marker-end="url(#arr3)" data-page-node-id="49wTDLTtmwBvgnGnCEOFoH"/>
+</svg>
+<figcaption data-page-node-id="JLkK6VoNH83tNOeKRfWrQo">图 2-2 数据流转：一切以数据湖为中心；读写分离，审查档案与报告都是从湖里"长"出来的。</figcaption>
+</div>
+
+<h3 data-page-node-id="ZWTujBxAI3X5Zw19CF7DVC">2.3 模块职责速查</h3>
+<div class="card" data-page-node-id="ggidQQO5hWO2wHwyDOfvEp">
+<table data-page-node-id="buiGlGrYKYfQRmoiJGHYok">
+<tr data-page-node-id="SmkA8F9ZHuEEUNLizqvsVK"><th data-page-node-id="h0u2IG0VJA0WAKgEosus3F">模块</th><th data-page-node-id="mJVWZrS952YdINiXcnaeFO">职责</th><th data-page-node-id="xO5qZcEqbC9EuEwmRJpfyh">关键文件</th></tr>
+<tr data-page-node-id="vT9PXJZU5OpJAZxQy1FaHS"><td data-page-node-id="YZ5RVs95HcVf6vQlkOvg5r"><code data-page-node-id="NTPJ0F138ZlHBBByP0EPWP">cli.py</code></td><td data-page-node-id="nkKzKuDs1sr3EYvFA4kh0I">统一命令入口（人 / AI 共用）</td><td data-page-node-id="U2dQSY66aELyI71I0lvHNV">data / query / universe / factor / model / optimize / decision 六组子命令</td></tr>
+<tr data-page-node-id="a7vzJPxZaEMjA0FwbCHxNx"><td data-page-node-id="Fxl31RELG1uYJofZ0xWYi6"><code data-page-node-id="78Pq9C1dnEFohRa5OidHlQ">quantlab/config.py</code></td><td data-page-node-id="LtSlBBoASNFKJlD9J9slBD">全局配置</td><td data-page-node-id="s0XT4HA8shNYGbbv9HKCH9">路径、参数、指数表、交易成本</td></tr>
+<tr data-page-node-id="2cncTaksq6OT7zuHJrSaml"><td data-page-node-id="IMmssHvZN5jL16qkdZKpth"><code data-page-node-id="p0cBgXrlo2AHjcdeNuYZjn">quantlab/data/</code></td><td data-page-node-id="5M4wmxUkc5KWPiOptt6V0v">L1：采集、存储、复权、股票池、体检、调度</td><td data-page-node-id="EG3z0hfN56hRCHLiH8lyZh">store.py · kline.py · universe.py · quality.py · update.py · sources/ · feature/（龙虎榜/两融/解禁/北向等特色数据）</td></tr>
+<tr data-page-node-id="lUGPBjWt6RVicKCmA3ypKW"><td data-page-node-id="JlXASqsxM3rmW4hqGHdaYU"><code data-page-node-id="cgQ1MklgW40WHwUZijxgBT">quantlab/factor/</code></td><td data-page-node-id="qGVnov4h0fUYqxV1F7LXJS">L2：因子定义、计算、IC 评估、审查</td><td data-page-node-id="0209vZ7KJ1EycV4opMHofC">base.py · registry.py · compute.py · quality.py · library/（258 因子）</td></tr>
+<tr data-page-node-id="wwzhAoFYOTfDxGyNWpPMIE"><td data-page-node-id="Fn3SMVBDKOOfsPsy0eoiZg"><code data-page-node-id="TOm0yWsity0Fh74wILCAG2">quantlab/model/</code></td><td data-page-node-id="QTIyKDoUflDF91FlXdtSoP">L3：合成、回测、生产评分</td><td data-page-node-id="aCnHBoEFGFee3l2K54s6NR">composite.py · backtest.py · pool_select.py</td></tr>
+<tr data-page-node-id="AVE3Fst8jNtCMywD2gkJjb"><td data-page-node-id="MgX05P1DBpIPF3JTTAiTiB"><code data-page-node-id="lg8scQpBjAPyNtsCbrZGuV">quantlab/optimize/</code></td><td data-page-node-id="Nl9gQQJDmP3fSFrd511TvE">L4：权重优化</td><td data-page-node-id="Uq078Lfer8rGn1Y7fkOcSj">等权/逆波动/最小方差/风险平价</td></tr>
+<tr data-page-node-id="KEsWXlPQtaCeDMH7sRoxdM"><td data-page-node-id="T7Yawu71oFfDnHsHBULbbN"><code data-page-node-id="dbBVzPHbgUwjBmy4x5LZtO">quantlab/decision/</code></td><td data-page-node-id="4qt7vxpzu65cNIj1bc4DdM">L5：信号、调仓、风控、状态</td><td data-page-node-id="q3AU1mXKaF2kL3UpDGPFub">target → rebalance → run；portfolio_state/</td></tr>
+<tr data-page-node-id="MiEvjLPWKadhEOWsDhCxlc"><td data-page-node-id="O3nG0YpO6zmdhfB7vlX9uY"><code data-page-node-id="Kf3Z94vGd3MANbH8yGaOhE">scripts/</code></td><td data-page-node-id="sThHD6dQwxZjwO3xYB7mn6">报告、流水线、研究脚本</td><td data-page-node-id="10PYWpBF0MttIPiOOFdFgg">daily_pipeline.py · factor_audit.py · forward_monitor.py · overview_report.py · batch*_ab_test.py（A/B 实验）</td></tr>
+<tr data-page-node-id="offTYZmhd0oER6O0yRMWJQ"><td data-page-node-id="UAWwH50dHPUO4I62XYRZiY"><code data-page-node-id="LqDzg5Hozf5UNUijq6Bnyj">research/</code></td><td data-page-node-id="RH6Wzg0vxfWvR6zlCllVGk">研究文档（含大量负面结论）</td><td data-page-node-id="8DgPvYg7A3m2EzFjMeRXdq">Alpha191深化检验.md · 分钟高频因子研究.md · 生产模型重构.md · 红利策略研究计划.md …</td></tr>
+</table>
+</div>
+
+<h3 data-page-node-id="S48bJNchOmwwSjVXi70xpb">2.4 三个关键工程机制</h3>
+<div class="card" data-page-node-id="GAtMjs4Fxt7VCHuOpv1ntm">
+<p data-page-node-id="UYH2NUs3PGoWroeCVmlKYH"><b data-page-node-id="p91yiFXtvd0LOO9Yj8z1et">① DuckDB 单写者 + 查询三层降级。</b>DuckDB 同一时刻只允许一个写连接，系统约定：<b data-page-node-id="tjMCL7ZBDOxRfeE4O7HnMy">写任务串行</b>（锁冲突立即报错，绝不并发跑两个更新）；<b data-page-node-id="o8Qd35JmYApBubQAYSTON1">查询永不阻塞</b>——本进程连接 → 只读直连 → 写锁被占时自动降级查 Parquet 镜像（数据截至最近一次更新）。所以任何时候 <code data-page-node-id="UmpWyas8OtFiaY7d6R74b7">query / data quality / universe</code> 都能跑。</p>
+<div class="note" data-page-node-id="g7BnertV13t0cMIlRdTQO8">遇到 <code data-page-node-id="FM3qwFtQVE9IkuKuOyuNcw">File is already open in ... (PID xxx)</code> 不要慌：这是单写者在工作（如每日流水线正在跑），读路径会自动降级，等写任务结束即可。本材料编写时就真实遇到了一次（overview_report.py 持锁中）。</div>
+<p data-page-node-id="vgnGAZnnwg1pujpTMTgr14"><b data-page-node-id="imMmqQbn0LX6B2wFq5cYgw">② Parquet 是唯一事实源。</b>数据库引擎只是可替换的加速层（Phase 2 规模上去后可换 QuestDB）。分钟级数据 5.19 亿行全在 Parquet 分区里，DuckDB 只挂视图。增量写入前必须做 anti-join 去重，merge 键要统一成 <code data-page-node-id="ds75RYaWxUavhW8ZRrN9vE">datetime64[ns]</code>——这些坑都已沉淀在更新代码里。</p>
+<p data-page-node-id="YbeiaBSXE35Xu16nSBLgRz"><b data-page-node-id="6382vo2pNj1wUDSerbO37m">③ 构建即审查 + 双闸门。</b>因子入库自动执行结构/分布/覆盖/IC/PIT 穿越自检，结果存 <code data-page-node-id="6xM2HDSqYZtIa9WmuwA8ih">data/lake/factor_audit/</code>（当前 <b data-page-node-id="ZE2yxyIiZO7ryiVwSIVxZc">258 个因子：257 PASS / 1 WARN</b>，<span class="tag real" data-page-node-id="QdF5ofYVBMAWBCwHvAEwQY">实测</span>）；合成层设审查闸门，引用 FAIL 因子直接拒绝；决策层还有前置闸门——任一模型因子覆盖度不足，候选快照整块不记、生产照常。</p>
+</div>
+
+<h3 data-page-node-id="cMUjKdNbp1Uq4FgP66TVN6">2.5 每日流水线：七步自动闭环</h3>
+<div class="svgbox" data-page-node-id="ru1QvJEbl2lzYbKu11cBzH">
+<svg viewBox="0 0 960 190" xmlns="http://www.w3.org/2000/svg" font-family="Microsoft YaHei,sans-serif" data-page-node-id="GUwjYM7qjuaZ7nE9NNjj5p">
+  <defs data-page-node-id="GAaRhVfR93sIqeQynVlbMg">
+    <marker id="arr4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse" data-page-node-id="kPAJ1nLjMa012RGFJ9JyMB">
+      <path d="M0,0 L10,5 L0,10 z" fill="#64748b" data-page-node-id="gOf6PwhisuGjDuNBldy1h6"/>
+    </marker>
+  </defs>
+  <g font-size="13" text-anchor="middle" data-page-node-id="eWFjKpbPWfAHAFaUNCL3cO">
+    <g data-page-node-id="TrZGTQex47iM2Xakww7PDX"><rect x="16"  y="40" width="104" height="64" rx="8" fill="#ecfeff" stroke="#0891b2" data-page-node-id="zAq0gCdOWxAmPlnj8T6pS3"/><text x="68"  y="66" font-weight="bold" fill="#155e75" data-page-node-id="LDyZDSmrQpHs6Zpyc0zPQp">1 数据更新</text><text x="68" y="86" font-size="11" fill="#64748b" data-page-node-id="O1mU3T8iRXbuUFdrLqdbvf">多源增量</text></g>
+    <g data-page-node-id="lmldTHIo4248j5ho1ihwpL"><rect x="142" y="40" width="104" height="64" rx="8" fill="#fffbeb" stroke="#f59e0b" data-page-node-id="ZA3wgMMXkmBcSEextZwIsP"/><text x="194" y="66" font-weight="bold" fill="#92400e" data-page-node-id="qGTiKDRZeaFjAtXV58mH7e">2 数据质量</text><text x="194" y="86" font-size="11" fill="#64748b" data-page-node-id="q8iEWkN8wm5kPVjQuWSB1X">FAIL 即熔断</text></g>
+    <g data-page-node-id="RgbEp8VsvkBkQzfKdNujlE"><rect x="268" y="40" width="104" height="64" rx="8" fill="#ecfeff" stroke="#0891b2" data-page-node-id="WdESWA3to8Q6Htq1a2dNpB"/><text x="320" y="66" font-weight="bold" fill="#155e75" data-page-node-id="7HA6K4QeXCy2xDOxJhZn1X">3 分钟特征</text><text x="320" y="86" font-size="11" fill="#64748b" data-page-node-id="NICpJqq7N4eVZCSkfD7caV">增量 8s 幂等</text></g>
+    <g data-page-node-id="k6C75ZD3WbOqoDMzvLscIi"><rect x="394" y="40" width="104" height="64" rx="8" fill="#f5f3ff" stroke="#7c3aed" data-page-node-id="J6t8EZNMMEVnrcq26vvYFh"/><text x="446" y="66" font-weight="bold" fill="#5b21b6" data-page-node-id="oQf3M5EHzWAGjcn4rrgcgD">4 因子计算</text><text x="446" y="86" font-size="11" fill="#64748b" data-page-node-id="QZKW0S4vvUaMOtncHDjwF7">compute_all</text></g>
+    <g data-page-node-id="Mgv7JGe7pZSBM9t7eEIVGI"><rect x="520" y="40" width="104" height="64" rx="8" fill="#f5f3ff" stroke="#7c3aed" data-page-node-id="c9MtCCFPvpkRnllel0HzRo"/><text x="572" y="66" font-weight="bold" fill="#5b21b6" data-page-node-id="awvGIaPEWFr8FbaZK0CBvr">5 拥挤度监控</text><text x="572" y="86" font-size="11" fill="#64748b" data-page-node-id="cDew1W7fWENhqEJp9T7hpJ">暴露诊断</text></g>
+    <g data-page-node-id="MncxoUGsWH3KJIGTERuTyz"><rect x="646" y="40" width="104" height="64" rx="8" fill="#f0fdf4" stroke="#16a34a" data-page-node-id="lpYA7M4x5d1f831C529Tgb"/><text x="698" y="66" font-weight="bold" fill="#166534" data-page-node-id="KLGgWpaFCvn61UOChrDIdA">6 决策信号</text><text x="698" y="86" font-size="11" fill="#64748b" data-page-node-id="pOReVfsDEspstfLHVDnOiZ">前放置闸门</text></g>
+    <g data-page-node-id="h4mgYFlfoYSFzpFazdmODq"><rect x="772" y="40" width="172" height="64" rx="8" fill="#fff" stroke="#94a3b8" data-page-node-id="KEPLuomBGTlr3rwd7d9oUw"/><text x="858" y="66" font-weight="bold" fill="#334155" data-page-node-id="j7TpsW4FBOnT74DZ98AtN5">7 报告 + 看板 + 前向</text><text x="858" y="86" font-size="11" fill="#64748b" data-page-node-id="3mc60AYuv5hxsGt5k7AVUe">overview / dashboard / monitor / 企微推送</text></g>
+  </g>
+  <g stroke="#64748b" stroke-width="2" marker-end="url(#arr4)" data-page-node-id="Vnvk1vOMtOpgygODKyowHb">
+    <line x1="120" y1="72" x2="138" y2="72" data-page-node-id="dfB4uz5BOv48nto4XY47ND"/><line x1="246" y1="72" x2="264" y2="72" data-page-node-id="NRaIiiVbKIyyKOu0JOFlZI"/>
+    <line x1="372" y1="72" x2="390" y2="72" data-page-node-id="CKUmHtUBJ4SZISDG8pRegK"/><line x1="498" y1="72" x2="516" y2="72" data-page-node-id="tXpPKEFxvuXgLaWN9KvrkM"/>
+    <line x1="624" y1="72" x2="642" y2="72" data-page-node-id="lXnCEV40NYzRcbzZ2ElN9Y"/><line x1="750" y1="72" x2="768" y2="72" data-page-node-id="gHq61nrSbxVaKjvVb4wrvL"/>
+  </g>
+  <text x="480" y="150" font-size="13" text-anchor="middle" fill="#64748b" data-page-node-id="tIODsuCz1oBaEgbDVvHGxE">一条命令全跑：<code data-page-node-id="yj0P5EjynFJBdqLuCqBjHd">$PY scripts/daily_pipeline.py</code>　—— 步骤间有依赖闸门：数据质量 FAIL 会阻塞因子与决策，任一模型因子覆盖不足则候选快照整块不记</text>
+</svg>
+<figcaption data-page-node-id="uvEXLtCSYQ3rMWXheyoOI5">图 2-3 每日流水线（scripts/daily_pipeline.py）：单进程串行，尊重 DuckDB 单写者约束。</figcaption>
+</div>
+
+<!-- ============ PART 3 ============ -->
+<h2 id="p3" data-page-node-id="xQonx4oy0J47JlgnMTwTnV">第三部分 · 上手演示：一个因子的完整旅程</h2>
+
+<p data-page-node-id="tzoTCD4noPNKMH2ZgPGSD5">下面用<b data-page-node-id="zcPubNRSNh1B610pYYAkl4">反转因子 <code data-page-node-id="e6Qg2XVzjyOFTDSeyCIObO">reversal_5</code></b>（5 日反转）走一遍完整链路——从环境确认到前向监控，共 8 步。所有输出均为系统实测记录。</p>
+<p class="small" data-page-node-id="xttwS0zSo9xd2B0YENXg5V">环境约定：项目专用 venv <code data-page-node-id="GhtldGVchz2TGPjcNgglme">PY="C:\Users\53497\.workbuddy\binaries\python\envs\quantlab\Scripts\python.exe"</code>（duckdb 1.5.5），工作目录为项目根。</p>
+
+<div class="step" data-page-node-id="ZmVoUJmwScxWwjkpoMgT2Y"><div class="n" data-page-node-id="LpM7v9qc9kcHrugByJBBlI">1</div><div class="b" data-page-node-id="u8PQDeTdDOoPtO3giZpnA6">
+<h3 data-page-node-id="uQm8tsqlgg2YXuke4NkfVP">确认环境与数据家底</h3>
+<pre class="term" data-page-node-id="xcMqjGWeBl4DGSOP5JUxod">$PY cli.py universe          <span class="c" data-page-node-id="wV8Gb0mpgETTTVAz7oOjsp"># 股票池规模</span>
+$PY cli.py query "SELECT COUNT(*) FROM kline_daily"   <span class="c" data-page-node-id="plf9OFiJgTsmDvqBwTzoID"># 直接 SQL 查湖</span></pre>
+<p data-page-node-id="eTtDgcaiRDcxH9GD9jKYfk"><b data-page-node-id="UksAGpHJWnFZilpriqb9DL">解读：</b>确认默认池 ashare_ex 有 5014 只、日K 585 万行且更新到最近交易日。任何研究开始前先看这一眼。</p>
+</div></div>
+
+<div class="step" data-page-node-id="JNYeXWfNlOGlg00XacmDMU"><div class="n" data-page-node-id="egrj2x2ClSb0RYXAw1Gyuo">2</div><div class="b" data-page-node-id="wXZYfgNLcFQhKymgIv7kMZ">
+<h3 data-page-node-id="b9cxEsmf9Kk8Bo40GQlOse">看看因子库里有什么</h3>
+<pre class="term" data-page-node-id="xlrRFNPGysImxfTmkH4Scq">$PY cli.py factor list
+      name        category  freq  description
+     amihud_20    liquidity daily  Amihud 非流动性 |日收益|/亿元成交额 的20日均值…
+  reversal_5     price     daily  5日反转（-5日收益，短期反转信号）
+     bp           value     daily  账面市值比 BP=净资产/总市值…</pre>
+<p data-page-node-id="r857WFavROMJJ5CM3bY24k"><b data-page-node-id="VtRerh7FXQfYIlad94aoYa">解读：</b>每个因子带类别、频率、口径描述。258 个因子（38 风格 + 180 Alpha191 + 高频/事件/筹码等）都在这里。</p>
+</div></div>
+
+<div class="step" data-page-node-id="6DVg8hiMiTY0xLTp3fxkz5"><div class="n" data-page-node-id="rN5cQw1F50gjYq59CS16LC">3</div><div class="b" data-page-node-id="cT7ovFKkmSNYcbHf1teEBx">
+<h3 data-page-node-id="V2P12uIyZqlxaqaT1w7yjy">计算因子（一行 SQL 定义，幂等写盘）</h3>
+<pre class="term" data-page-node-id="KKGw6fUH0EOp3z2djDdy4p">$PY cli.py factor compute reversal_5 --universe ashare_ex</pre>
+<p data-page-node-id="KIDqGwFgCF6MDdTXiKAvHp">因子定义就是一段 SQL（<code data-page-node-id="CfwiJd8H7hXIajwE7amD2l">quantlab/factor/library/price.py</code>，真实源码）：</p>
+<pre data-page-node-id="6XxnF2InMkhXNEbKZNChz3"><span class="c" data-page-node-id="P7wdi2TnAkFuEgYgezJGLK"># 基类：N 日动量/反转，_sign=+1 动量，-1 反转</span>
+class _MomBase(SqlFactor):
+    def _sql(self, start=None, end=None, universe=None):
+        usql, uparams = universe_sql(universe)
+        sql = f"""
+        {QFQ_CLOSE}
+        SELECT date, code,
+               {self._sign} * (close_adj / LAG(close_adj, {self.n})
+                 OVER (PARTITION BY code ORDER BY date) - 1) AS value
+        FROM qfq
+        WHERE 1=1 {usql}
+        QUALIFY value IS NOT NULL
+        """
+        return sql, uparams
+
+@register
+class Reversal5(_MomBase):
+    name = "reversal_5"
+    description = "5日反转（-5日收益，短期反转信号）"
+    n = 5
+    _sign = -1</pre>
+<p data-page-node-id="PEiKmDGpluNZsbE6Gr3JXB"><b data-page-node-id="6O7vMnjowJEKNfTnphC9wc">解读：</b>DuckDB 窗口函数一次算全市场，避免 Python 逐行循环；<code data-page-node-id="QUZaFBmcCxmvhUZ7GZej3n">QFQ_CLOSE</code> 片段自动前复权；写盘幂等（重复跑安全）。入库时自动触发审查（PIT 无前视自检）。</p>
+</div></div>
+
+<div class="step" data-page-node-id="RXEDw9ABx99ToPKTyaRLOf"><div class="n" data-page-node-id="EbFV5HapvziQ4tBwY8XwIO">4</div><div class="b" data-page-node-id="t4cb4B10FllIEcxzuMepDV">
+<h3 data-page-node-id="LFDjFoDLA92VXOFL22oe0l">IC 评估：这个因子有预测力吗</h3>
+<pre class="term" data-page-node-id="nlj4uR3ugPxPnMvpR8tNDG">$PY cli.py factor summary reversal_5 --horizon 20
+<span class="c" data-page-node-id="2QAaMpIloHxLvm0TurihgQ"># 实测结果：IC(20日) = +0.062，ICIR 稳定为正</span></pre>
+<p data-page-node-id="cR7v5Ra7fwoKLbRb4wEyIo"><b data-page-node-id="ZrakuBjhNNeRYar6FIeefc">解读：</b>IC = 每日因子值与未来 20 日收益的截面秩相关。<b data-page-node-id="vyhg8I7wBBHLsVUzt0Z9Ag">+0.062 的含义</b>：过去 5 日跌得多的股票，未来 20 日倾向于涨（反转效应）。经验参考线：|IC|&gt;0.03 可用，&gt;0.05 较强；更要看 ICIR（稳定性）而非单点 IC。</p>
+</div></div>
+
+<div class="step" data-page-node-id="QZM3f6kc2IbFtZvis5Qox7"><div class="n" data-page-node-id="b6mBqkPG1yHJ5jfb95dkEO">5</div><div class="b" data-page-node-id="RFw7XpMqYIDEkEh7Daps8s">
+<h3 data-page-node-id="X7BTI6zhetCGoNWc9uchsl">分层回测：单调性才是说服力</h3>
+<pre class="term" data-page-node-id="fP90pd64w7mcGvybsNZ9ng">$PY cli.py factor backtest reversal_5 --horizon 20 --quantiles 5
+<span class="c" data-page-node-id="twjtMErZDyVsg5Hn1XcOvG"># 实测结果（年化）：</span>
+<span class="c" data-page-node-id="b7rhOJZw4xMPXZGIZKPGcI">#   Q1(最低分位) 1.3%  →  Q5(最高分位) 15.2%，多空 +13.8%，单调性 0.7</span></pre>
+<p data-page-node-id="QFVkdbiyP7REoLp3NhG7nq"><b data-page-node-id="GLMAvpc6HnFOiIZqkXEqT7">解读：</b>按因子值分 5 组，每组持有 20 日（非重叠，防复利虚高）。做多高分位年化 15.2% vs 低分位 1.3%——收益随因子值<b data-page-node-id="eZaEVy9c08id1XtNFNy5qx">单调递增</b>，与 IC 方向一致。单调性差、只有两端有差异的因子通常不可信。</p>
+</div></div>
+
+<div class="step" data-page-node-id="X8rteLqH0bVjRvZaDlw9f9"><div class="n" data-page-node-id="u0EnVoOTnQWkzynawJm0ti">6</div><div class="b" data-page-node-id="s1OGLcTZWBfDVSQtJ8JA3c">
+<h3 data-page-node-id="6kyKouejjM9bu5lGYFi35Q">组合层验证：多因子合成回测</h3>
+<pre class="term" data-page-node-id="hvYb5fAZEVkoVsBQCzsy63">$PY cli.py model backtest --factors size,amihud_20 --n 50 --rebalance 20
+<span class="c" data-page-node-id="kAmn3CUjDxqvn7BEaqfraA"># 生产模型实测（2022-01 ~ 2026-09，已扣佣金/印花税/滑点）：</span>
+<span class="c" data-page-node-id="Dqfn30M4AsNVAkbLolPB5H">#   年化 32.3% / 夏普 0.98 / IR 1.64</span>
+<span class="c" data-page-node-id="iO7rmFcwkl48AdOnC3ZVSl">#   可成交性约束（剔除建仓日涨幅>7%股）后 年化 32.0%，仍稳健</span></pre>
+<p data-page-node-id="xD81fTDtAc7purtnBDm9h7"><b data-page-node-id="mM0bKG2bEDu1psAFsVP5ti">解读：</b>rank 标准化 → 方向校正（两因子均做多低值）→ 等权 → top50 等权持有。注意对比：<b data-page-node-id="vll7isDHAEw7DqQhnNWBVU">任何新候选模型都要与这个基准 A/B</b>——历史上 Alpha191 合成、高频合成在组合层全部跑输它，这就是双闸门的现实意义。</p>
+</div></div>
+
+<div class="step" data-page-node-id="Wm4xy6LDM0u3KfBRe9SSpr"><div class="n" data-page-node-id="38WwcmA3HvyurkBHYEwF2L">7</div><div class="b" data-page-node-id="nvjcuCeHqFCCFvxvO4HnqN">
+<h3 data-page-node-id="GJm3oaMblCM8VrdZwZizug">权重优化与每日决策</h3>
+<pre class="term" data-page-node-id="lTo1t4kZDJZjHBW9dZdjTu">$PY cli.py optimize compare          <span class="c" data-page-node-id="nDQ5TeFOzY9q4ksvgFgNKe"># 逆波动加权夏普 0.57 vs 等权 0.49（实测占优）</span>
+$PY cli.py decision run              <span class="c" data-page-node-id="UhpD27t30PxnzoIGUv4A1u"># 目标持仓 → 调仓指令 → 持久化状态</span></pre>
+<pre class="term" data-page-node-id="D3pdgMC2me9W0qKw89Qzyw">portfolio_state/current.json   <span class="c" data-page-node-id="6M61JknXXz6QjmnMfmKZ0o"># 当前目标持仓（个股权重≤5%，行业≤30%）</span>
+portfolio_state/state_history.json  <span class="c" data-page-node-id="YMMtGWtjkla27QNXUbUMML"># 调仓历史</span></pre>
+<p data-page-node-id="IiK20dnyTZCOYpRGVTLLgs"><b data-page-node-id="EpEhg095XwDwwh0Wvf5qjG">解读：</b>决策层把评分变成可执行清单：目标持仓、与当前持仓的 diff 调仓指令、风控约束，全程幂等可重跑。每日快照同时写入纸面前向账本 <code data-page-node-id="8ANZvO5qYxeFXN8X7mLHyR">signal_portfolio</code>。</p>
+</div></div>
+
+<div class="step" data-page-node-id="345oHq4tAPRACo4lMiEavx"><div class="n" data-page-node-id="dY8tQIGwu6mpuNNBx7U2Kt">8</div><div class="b" data-page-node-id="yBKWudItpeHstKAPNI9j4H">
+<h3 data-page-node-id="H6r647wsqMAGaygEOY7Nbz">前向监控：用真实时间裁决</h3>
+<pre class="term" data-page-node-id="z2L6hHHeHFsvlDfEw6tfRQ">$PY scripts/forward_monitor.py   →  reports/forward_monitor.html
+$PY scripts/factor_audit.py all  →  reports/factor_audit.html</pre>
+<p data-page-node-id="Up1GiDFBLE4NvI3pDxTBbh"><span class="tag real" data-page-node-id="QSkA2MiT4cC60qzMObmDIc">实测（2026-09-09 读取）</span>前向监控报告当前显示：生产模型 <code data-page-node-id="YP4gHiRAul9qeJkAHXDNS4">size+amihud_20</code> 自 2026-09-04 起纸面跟踪，累计 <b data-page-node-id="a0ywLTbPqxC70dzLXhKWTr">+3.15%</b>（2 个交易日），相对中证1000 超额 <b data-page-node-id="k7uJEwGsdiRAmqtWlJ6d2Q">+2.56%</b>。样本虽少，但机制已经跑通：<b data-page-node-id="0EmLwwE1NJetUx5KvIULx8">回测里的每一个数字，最终都要接受前向账本的检验。</b></p>
+<div class="ok-box" data-page-node-id="uFXRm3Ux8Hmh419HpcxFRu">至此完整闭环走完：<b data-page-node-id="it5gVdL4l19wrOrZAtWGEo">构思 → 数据 → 因子 → IC/分层 → 组合回测 → 优化 → 决策 → 前向监控</b>。每一步的命令、输出、产物都可直接复现。</div>
+</div></div>
+
+<h3 data-page-node-id="i50inLpaeniHYuqcKcq3DQ">3.9 进阶：批量研究怎么跑</h3>
+<div class="card" data-page-node-id="3nTzK8P2WvvVzZA2Rq6AwG">
+<p data-page-node-id="wGd3ZdDm62oTmCvZbJ3DqH">单因子走完后，批量研究有两条成熟路径：</p>
+<table data-page-node-id="jL08e7QGZlHqxZdGadRoEx">
+<tr data-page-node-id="nEx71roIbjeAjx6D1akgcE"><th data-page-node-id="NR4iSTDnB2o8FmwNhbN39S">路径</th><th data-page-node-id="Q5BDWS2ZfRRHb3PBUmrvC1">工具</th><th data-page-node-id="x30RczGwdVi0BPU8UcLplc">产物</th></tr>
+<tr data-page-node-id="lGtjHF1B8H6ud0VKgzBKXb"><td data-page-node-id="b4CmWU95qJhRPFH7nTVpYf">券商因子库批量验证</td><td data-page-node-id="Dvxon6nVkxI6UYUBLVmgAh"><code data-page-node-id="xutmMEiF2NDNGFmYyRMy4J">scripts/alpha191_compute.py calc / ic</code> + <code data-page-node-id="88J3LEFDpXOS3I40viRx7R">alpha191_report.py</code></td><td data-page-node-id="jd2DuQLTbXXi1CZf3mvxPG"><code data-page-node-id="FrMdzrxfDZRgws1pKLzq1D">reports/alpha191_report.html</code>：191 因子公式覆盖/IC/去冗余/组合检验一页看全</td></tr>
+<tr data-page-node-id="tquBBjab1Ummad3R3eF9P0"><td data-page-node-id="J4bQha7cWcNfvIQwylVz9d">新因子候选 A/B 实验</td><td data-page-node-id="HWC4MX64fcUcRfN76scFqd"><code data-page-node-id="AT0ATAwNGH0qFPcBWLLZ94">scripts/batch*_ab_test.py</code> 系列（每轮一个 batch 脚本）</td><td data-page-node-id="M98QF2OgefirStYyisDueI">候选模型 vs 生产基准的对照结论 + <code data-page-node-id="mtm4lPOm14ig6SZREdyemb">research/</code> 归档文档</td></tr>
+</table>
+<p class="small" data-page-node-id="BXujkHF4K6EEehkTluhiHO">研究脚本的惯例：分析类脚本遇写锁用 in-memory DuckDB + glob 直读 Parquet（参考 <code data-page-node-id="fPMkhSe9D21tTAb8wLljlA">scripts/highfreq_neutral.py</code>）；每轮研究结束把结论（包括负面结论）写进 <code data-page-node-id="aiXuX6RFvsJhV3DZj8fIU9">research/*.md</code> 并 commit。</p>
+</div>
+
+<!-- ============ APPENDIX ============ -->
+<h2 data-page-node-id="qEZGATy7hnDA39ZjzvHPGD">附录 A · 常用命令速查</h2>
+<div class="card" data-page-node-id="qz7IsKylb0wRZTS6V5xgxu">
+<pre data-page-node-id="1NtLYzckZbW9tKMZiPDzxh">$PY cli.py data status                 <span class="c" data-page-node-id="3Cgx9nTTRAxHuzEU65bgtA"># 各域水位/行数/新鲜度</span>
+$PY cli.py data update                 <span class="c" data-page-node-id="WXIs7CUmRnK90zdajrhYa5"># 日度增量更新（写锁串行，勿并发）</span>
+$PY cli.py data quality --sample 30    <span class="c" data-page-node-id="bUPXlc6UBCHCr71OaWGDyj"># 数据体检</span>
+$PY cli.py universe [pool]             <span class="c" data-page-node-id="RexmUM89kiK1RPG3lq0H3R"># 股票池规模</span>
+$PY cli.py query "SQL"                 <span class="c" data-page-node-id="iDxuS8ZDHjpTZVAdL1ua96"># SQL 查湖（锁被占自动降级镜像）</span>
+$PY cli.py factor list                 <span class="c" data-page-node-id="jcPcE7mlX5Ytr2dPe3A7Co"># 因子清单</span>
+$PY cli.py factor compute &lt;name&gt; [--universe ashare_ex]
+$PY cli.py factor summary &lt;name&gt; --horizon 20
+$PY cli.py factor backtest &lt;name&gt; --horizon 20 --quantiles 5
+$PY cli.py factor corr                 <span class="c" data-page-node-id="rHnJtTsWtiVu40hyfpQBAq"># 因子相关性（去冗余）</span>
+$PY cli.py model backtest --factors a,b --n 50 --rebalance 20
+$PY cli.py model walkforward --split 2025-01-01   <span class="c" data-page-node-id="DDoKe9jPojxG2E7NFHuQSN"># 样本外验证</span>
+$PY cli.py optimize compare
+$PY cli.py decision run
+$PY scripts/daily_pipeline.py          <span class="c" data-page-node-id="HiEwnOAmw3A8TQYwKRIW0V"># 每日七步流水线</span>
+$PY scripts/factor_audit.py all        <span class="c" data-page-node-id="4lrXnHuwTKlP89Da0IXjCL"># 因子审查报告</span>
+$PY scripts/forward_monitor.py         <span class="c" data-page-node-id="l2wJqeO1cMndLNkWe8AkJj"># 前向监控</span>
+$PY tests/test_smoke.py                <span class="c" data-page-node-id="8Rj0FQNEBQgNzk7bZmBJ9z"># 冒烟测试</span></pre>
+</div>
+
+<h2 data-page-node-id="fVrHdDXyATJNVsB6YujbNX">附录 B · 新人注意事项</h2>
+<div class="card" data-page-node-id="iqFAoxiOWbv3AHhasShEa9">
+<ol data-page-node-id="XgDPNHQL6nj6D0QLCJAwri">
+<li data-page-node-id="DPo54grdVyHuVBueKsm0Aa"><b data-page-node-id="nAAUemBOA3NqHgESxK6Zzu">写锁纪律：</b>DuckDB 单写者——<code data-page-node-id="OMFTsI7iGOCMGdEqMi5mwp">data init/update</code>、因子写入不可并发；查询类命令随时可跑。见到 <code data-page-node-id="r4MqasSNuXhn94hw3U5SBL">File is already open</code> 属正常，等写任务结束。</li>
+<li data-page-node-id="GQFmvj0A7my3GBnRJejRrr"><b data-page-node-id="3vVus34fSIx9bD4pmXl3tj">数据口径：</b>kline_daily 价格不复权；<code data-page-node-id="NYL8qir7IKjU9pBfIiz3D6">vol</code> 单位=股、<code data-page-node-id="GJiN3DtPlxVt6KkSyDvFd5">amount</code>=元；分红加回用前瞻窗口；分钟湖真实覆盖自 2025-01-02 起（2022-2024 无免费源）。</li>
+<li data-page-node-id="OnpIGV90VF7mhIXSHKHefl"><b data-page-node-id="GYcaIaE5s07ywmI8Qxz8bE">方向校正：</b>手工 rank 合成必须带 <code data-page-node-id="XPtHYmYhwWvQIv063eUEGQ">FACTOR_DIRECTION</code>（size=-1 等），漏方向结论会失真。</li>
+<li data-page-node-id="dVvEoHYT3rPjaLQbWi2uRE"><b data-page-node-id="2GWuFC0lwEFGyJgxeE4oo4">研究纪律：</b>上线前必须过 walk-forward 样本外验证；组合层必须与生产基准 A/B；负面结论如实写进 <code data-page-node-id="GGKl9jhShkNvzmmH7knJID">research/</code>。</li>
+<li data-page-node-id="xwSaXz8V5jdJy6ufyVXDHh"><b data-page-node-id="iBQJn40lsBDQYF4SUTTALS">代码变更随手 commit</b>（仓库已建 git，data/reports 不入库）。</li>
+<li data-page-node-id="M1EOTvE3baHHWKSyzAy8zc"><b data-page-node-id="b3CPLq5DTuyBvYRDMdVwJM">进阶阅读：</b><code data-page-node-id="fKDy5WMMUK6lNtS1ABw7YX">docs/DEV_LOG.md</code>（迭代日志）· <code data-page-node-id="9RdqI7Vj2RQJRDuIDXW7Pn">research/*.md</code>（12 份研究档案）· <code data-page-node-id="ph0HUh6WXJs4QbphBEjvSi">reports/*.html</code>（各类报告样例）。</li>
+</ol>
+</div>
+
+<p class="meta" style="margin-top:40px" data-page-node-id="wkWDr9jhz6sZ0HhsYiVORB">—— QuantLab · 让每一个结论都可复现、可证伪、可追溯 ——</p>
+</div>
+</body>
+</html>
