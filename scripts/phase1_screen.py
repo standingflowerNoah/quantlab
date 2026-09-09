@@ -23,6 +23,9 @@ import pandas as pd
 
 NEW_FACTORS = ["team_coin_20", "climb_peak_20", "volvol_20",
                "amp_nonjump_20", "jump_share_20", "boat_follow_20"]
+# 支持命令行指定因子（如补筛新增因子）
+if len(sys.argv) > 1:
+    NEW_FACTORS = sys.argv[1:]
 
 # 去重抽样：每月首个交易日，近 24 个月
 SAMPLE_SQL = """
@@ -176,7 +179,8 @@ def main():
               flush=True)
 
     res = pd.DataFrame(results)
-    out = Path("reports/phase1_screen.csv")
+    out = Path("reports/phase1_screen_add.csv" if len(sys.argv) > 1
+               else "reports/phase1_screen.csv")
     res.to_csv(out, index=False, encoding="utf-8-sig")
     print("\n" + res.to_string(index=False))
     print(f"\n已保存 {out}")

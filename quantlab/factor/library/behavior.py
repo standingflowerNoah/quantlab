@@ -310,3 +310,90 @@ class BoatFollow20(SqlFactor):
 
 
 register(BoatFollow20)
+
+
+# ════════════════════════════════════════════════════════════════════
+# 7. 锚定反转（中银多因子系列之三，日频原版逻辑，2026-09-10 补齐）
+#    锚定偏误+处置效应：近 10 日上涨 → 反转投资者以近期低点为锚
+#    （close/60日最低-1，相对涨幅衡量透支度）；近 10 日下跌 → 以近期
+#    高点为锚（close/60日最高-1，相对跌幅衡量反弹空间）。
+#    因子值越小越靠近买入点（研报负向）。增强版 × 个股自身波动率
+#    （高波动个股超跌反转力度更大）。
+#    研报绩效：中证500 内 IC 约 -0.025（2022 后衰减）
+# ════════════════════════════════════════════════════════════════════
+_ANCHOR = """
+WITH px AS (
+    SELECT date, code,
+           close * adj_factor AS c,
+           close * adj_factor / LAG(close * adj_factor) OVER w - 1 AS r
+    FROM kline_daily
+    WHERE close > 0 {usql}
+    WINDOW w AS (PARTITION BY code ORDER BY date)
+),
+base AS (
+    SELECT date, code, c, r,
+           c > LAG(c, 10) OVER w10 AS up10,
+           MIN(c) OVER w60 AS lo60,
+           MAX(c) OVER w60 AS hi60,
+           COUNT(c) OVER w60 AS n60,
+           STDDEV_SAMP(r) OVER w20 AS vol20
+    FROM px
+    WINDOW
+      w10 AS (PARTITION BY code ORDER BY date),
+      w20 AS (PARTITION BY code ORDER BY date
+              ROWS BETWEEN 19 PRECEDING AND CURRENT ROW),
+      w60 AS (PARTITION BY code ORDER BY date
+              ROWS BETWEEN 59 PRECEDING AND CURRENT ROW)
+)
+{expr}
+"""
+
+
+class AnchorReversal20(SqlFactor):
+    name = "anchor_reversal_20"
+    description = ("锚定反转20日（中银系列三）：近10日上涨以60日低点为锚、下跌以高点为锚，"
+                   "close/锚点-1（锚定偏误+处置效应）；研报负向")
+    category = "price"
+    freq = "daily"
+
+    _EXPR = """
+SELECT date, code, value FROM (
+    SELECT date, code,
+           CASE WHEN n60 >= 45 AND up10 IS NOT NULL
+                THEN CASE WHEN up10 THEN c / lo60 - 1
+                          ELSE c / hi60 - 1 END END AS value
+    FROM base
+) WHERE value IS NOT NULL
+"""
+
+    def _sql(self, start=None, end=None, universe=None):
+        usql, uparams = universe_sql(universe)
+        return _ANCHOR.format(usql=usql, expr=self._EXPR), uparams
+
+
+register(AnchorReversal20)
+
+
+class AnchorRevVol20(SqlFactor):
+    name = "anchor_rev_vol_20"
+    description = ("锚定反转×波动率增强20日（中银系列三增强）：锚定反转因子值 × "
+                   "20日自身收益波动率（高波动个股反转力度更大）；研报负向")
+    category = "price"
+    freq = "daily"
+
+    _EXPR = """
+SELECT date, code, value FROM (
+    SELECT date, code,
+           CASE WHEN n60 >= 45 AND up10 IS NOT NULL AND vol20 IS NOT NULL
+                THEN (CASE WHEN up10 THEN c / lo60 - 1
+                           ELSE c / hi60 - 1 END) * vol20 END AS value
+    FROM base
+) WHERE value IS NOT NULL
+"""
+
+    def _sql(self, start=None, end=None, universe=None):
+        usql, uparams = universe_sql(universe)
+        return _ANCHOR.format(usql=usql, expr=self._EXPR), uparams
+
+
+register(AnchorRevVol20)
