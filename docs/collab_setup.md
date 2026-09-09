@@ -18,8 +18,8 @@
 python -m venv C:\quantlab\envs\quantlab
 C:\quantlab\envs\quantlab\Scripts\pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
-# 2) 克隆代码仓库（Gitee 私有仓库，地址另发）
-git clone <REPO_URL> C:\quantlab
+# 2) 克隆代码仓库（GitHub 私有仓库，需仓库所有者邀请你为 Collaborator）
+git clone https://github.com/standingflowerNoah/quantlab.git C:\quantlab
 cd C:\quantlab
 
 # 3) 冒烟测试（不依赖数据湖也应通过核心单测）
