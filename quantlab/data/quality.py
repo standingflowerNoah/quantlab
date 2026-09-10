@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import random
+import time
 
 import pandas as pd
 
@@ -115,20 +116,29 @@ def check_all(sample: int = 30) -> pd.DataFrame:
         if codes:
             from .sources import tencent_source as tx
             snap = tx.batch_quotes(codes)
-            latest = query("""
-                SELECT code, close FROM kline_daily
-                WHERE date = (SELECT MAX(date) FROM kline_daily)""", )
-            latest = latest[latest["code"].isin(codes)]
-            m = latest.merge(snap[["code", "price"]], on="code")
-            m["err"] = ((m["close"] - m["price"]) / m["price"]).abs()
-            # 收盘价与最新价在非交易时段应基本一致（容忍当日波动 2%）
-            n_big = int((m["err"] > 0.02).sum())
-            if n_big <= sample * 0.1:
-                add("kline_daily", "consistency", "pass",
-                    f"抽样 {len(m)} 只收盘价 vs 腾讯行情一致（>2% 偏差 {n_big} 只，含盘中波动）")
-            else:
+            if snap.empty:          # 网络抖动重试一次
+                time.sleep(3)
+                snap = tx.batch_quotes(codes)
+            # 快照不可用（如 SSL 超时导致空表/缺列）只 warn，不判 FAIL
+            # —— 外部行情不可达≠数据异常，不应阻塞因子/决策链（2026-09-10 事故）
+            if snap.empty or "code" not in snap.columns or "price" not in snap.columns:
                 add("kline_daily", "consistency", "warn",
-                    f"抽样 {len(m)} 只中 {n_big} 只收盘价偏差>2%")
+                    "腾讯行情快照不可用（网络超时），一致性检查本轮跳过（非数据异常）")
+            else:
+                latest = query("""
+                    SELECT code, close FROM kline_daily
+                    WHERE date = (SELECT MAX(date) FROM kline_daily)""", )
+                latest = latest[latest["code"].isin(codes)]
+                m = latest.merge(snap[["code", "price"]], on="code")
+                m["err"] = ((m["close"] - m["price"]) / m["price"]).abs()
+                # 收盘价与最新价在非交易时段应基本一致（容忍当日波动 2%）
+                n_big = int((m["err"] > 0.02).sum())
+                if n_big <= sample * 0.1:
+                    add("kline_daily", "consistency", "pass",
+                        f"抽样 {len(m)} 只收盘价 vs 腾讯行情一致（>2% 偏差 {n_big} 只，含盘中波动）")
+                else:
+                    add("kline_daily", "consistency", "warn",
+                        f"抽样 {len(m)} 只中 {n_big} 只收盘价偏差>2%")
     except Exception as e:
         add("kline_daily", "consistency", "fail", f"检查异常: {e}")
 
