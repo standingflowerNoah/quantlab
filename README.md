@@ -3,6 +3,61 @@
 > 五层架构：L1 数据层 → L2 因子层 → L3 模型层 → L4 优化层 → L5 决策层
 > 当前版本：**L1~L5 五层全部建成**（数据→因子→模型→优化→决策）
 
+生产选股模型：`size + amihud_20` 双因子等权 top100（基准中证1000），每日流水线自动跑
+数据更新 → 质量闸门 → 因子+审查 → 决策信号 → 总览报告 → 数据看板 → 前向监控 七步，
+配套 FastAPI 只读研究网关（`scripts/api_server.py`）支持多人协作查询。
+
+## 新人上手四步路线
+
+> 本仓库为 GitHub 私有仓库，需所有者邀请你为 Collaborator 后才能克隆。
+
+### 第 1 步 · 克隆代码
+
+```bash
+git clone https://github.com/standingflowerNoah/quantlab.git C:\quantlab
+cd C:\quantlab
+```
+
+仓库只含代码与研究文档（~10MB）；`data/`、`reports/`、`tools/` 不入库，数据按下文第 3 步获取。
+
+### 第 2 步 · 环境配置（Windows，约 30 分钟）
+
+```bash
+# 1) Python 3.13 + 专用 venv（pypi 走清华镜像，国内网络必须）
+python -m venv C:\quantlab\envs\quantlab
+C:\quantlab\envs\quantlab\Scripts\pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+# 2) 冒烟测试（不依赖数据湖也应通过）
+C:\quantlab\envs\quantlab\Scripts\python.exe tests/test_smoke.py
+```
+
+依赖要点（全部已固化在 `requirements.txt`）：`duckdb 1.5.5`（存储引擎）、`pytdx`（通达信行情）、
+`pandas/numpy`、`fastapi+uvicorn`（研究网关）。分钟级数据依赖 free-stockdb Windows 工具链
+（`tools/free-stockdb/win/stockdb/`），只跑日频研究可不装。
+
+### 第 3 步 · 复刻数据到本地（两条路线，详见 `docs/collab_setup.md`）
+
+| 路线 | 做法 | 体量 | 适用 |
+|---|---|---|---|
+| **A 全量拷贝**（推荐） | 移动硬盘/网盘拷贝三块：fsdb 镜像 24G + 分钟湖 6.5G + 因子湖 9.5G（日K DuckDB 与湖一起带走） | ~41GB | 追求与生产环境数字完全一致 |
+| **B 远程重建** | `$PY cli.py data init` 全量首建 + fsdb 镜像同步 + `$PY cli.py factor compute-all` | 天然一致但耗时数小时~1天 | 拿不到硬盘时 |
+
+> 只跑日频研究：路线 B 的 `data init`（~20GB 增量到 2022-01）即可覆盖全部日频因子与模型。
+> 数据就位后必跑验证清单：`data status` → `data quality` → `tests/test_smoke.py`，数字应与
+> 路线 A 完全一致（同源同算法）；差异大先查 `data quality`。
+
+### 第 4 步 · 全面理解系统（按序阅读）
+
+| 顺序 | 材料 | 内容 |
+|---|---|---|
+| ① | **`docs/quantlab_guide.html`** | 图文讲解材料：研究流程闭环 → 五层架构与数据流转（含架构图）→ reversal_5 八步上手实操，**新人从这里开始** |
+| ② | 本 README 下文各层章节 | 五层各自的命令与实测结果 |
+| ③ | `research/*.md` | 13 篇研究主线文档：正面/负面结论全部归档（诚实归因路线） |
+| ④ | `reports/`（overview_report.html 等） | 每日流水线产出的总览报告与数据看板 |
+
+文档导航：`docs/architecture.html`（架构设计）· `docs/DEV_LOG.md`（迭代日志）·
+`docs/collab_setup.md`（协作环境与数据分发）· `docs/service_deploy.md`（服务化部署/API 网关）
+
 ## 快速上手
 
 ```bash
@@ -54,6 +109,9 @@ $PY scripts/model_comparison.py
 
 # 冒烟测试（回归保护）
 $PY tests/test_smoke.py
+
+# FastAPI 只读研究网关（多协作查询；QUANTLAB_API_TOKEN 自设，见 docs/service_deploy.md）
+$PY scripts/api_server.py --port 8000
 ```
 
 > 开发日志见 `docs/DEV_LOG.md`（记录了各轮迭代的优化与验证结论）。
@@ -286,6 +344,8 @@ DuckDB 是**单写者**模型，本系统的策略：
 quant/
 ├── cli.py                    # CLI 入口（agent 与人类共用）
 ├── scripts/
+│   ├── daily_pipeline.py     # 每日七步流水线（调度入口）
+│   ├── api_server.py         # FastAPI 只读研究网关（协作查询/报告服务）
 │   ├── init_data.py          # 全量首建（幂等）
 │   └── accept_p1.py          # P1 验收脚本
 ├── quantlab/
@@ -313,8 +373,13 @@ quant/
 │   └── decision/             # L5 决策层（信号/调仓/风控/状态）
 ├── data/
 │   ├── quant.duckdb          # 主库
-│   └── lake/                 # Parquet 湖（clean 镜像 + factor 因子库）
-└── docs/architecture.html    # 架构设计文档
+│   └── lake/                 # Parquet 湖（clean 镜像 + factor 因子库 + factor_audit 审查）
+└── docs/
+    ├── quantlab_guide.html   # 合作版图文讲解材料（新人入口）
+    ├── collab_setup.md       # 协作环境搭建与数据分发指南
+    ├── service_deploy.md     # 服务化部署指南（API 网关/JupyterLab）
+    ├── architecture.html     # 架构设计文档
+    └── DEV_LOG.md            # 迭代日志
 ```
 
 ## 已知限制（沙箱网络环境实测）
