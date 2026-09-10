@@ -247,6 +247,9 @@ class Store:
         if not d.exists():
             return pd.DataFrame()
         df = pd.read_parquet(d)
+        if "value" not in df.columns and "score" in df.columns:
+            # 模型分数因子（lgbm_*/gru_seq_*）落库为 score 列，统一暴露为 value
+            df = df.rename(columns={"score": "value"})
         if start is not None:
             df = df[df["date"] >= pd.to_datetime(start)]
         if end is not None:

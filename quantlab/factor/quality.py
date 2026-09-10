@@ -61,6 +61,10 @@ def _factor_ic_sql(name: str, horizon: int, store: Store,
     if not files:
         return None
     paths = ", ".join("'" + str(f).replace("\\", "/") + "'" for f in files)
+    # 值列兼容：标准因子为 value；模型分数因子（lgbm_*/gru_seq_*）为 score
+    desc = store.q(
+        f"DESCRIBE SELECT * FROM read_parquet(['{files[0].as_posix()}'])")
+    vcol = "value" if "value" in set(desc["column_name"]) else "score"
     sql = f"""
     WITH fwd AS (
         SELECT date, code, c_lead / c - 1 AS fwd
@@ -73,7 +77,7 @@ def _factor_ic_sql(name: str, horizon: int, store: Store,
         WHERE c_lead IS NOT NULL AND c > 0
     ),
     joined AS (
-        SELECT CAST(f.date AS DATE) AS date, f.code, f.value, w.fwd
+        SELECT CAST(f.date AS DATE) AS date, f.code, f.{vcol} AS value, w.fwd
         FROM read_parquet([{paths}]) f
         JOIN fwd w ON CAST(f.date AS DATE) = w.date AND f.code = w.code
     ),

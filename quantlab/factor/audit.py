@@ -372,8 +372,13 @@ def _load_factor_values(name: str) -> pd.DataFrame | None:
         return None
     store = Store()
     try:
+        # 值列兼容：标准因子为 value；模型分数因子（lgbm_*/gru_seq_*）为 score
+        desc = store.q(
+            f"DESCRIBE SELECT * FROM read_parquet('{d.as_posix()}/*.parquet')")
+        vcol = ("value" if "value" in set(desc["column_name"]) else "score")
         df = store.q(
-            f"SELECT date, code, value FROM read_parquet('{d.as_posix()}/*.parquet')")
+            f"SELECT date, code, {vcol} AS value "
+            f"FROM read_parquet('{d.as_posix()}/*.parquet')")
     except Exception as e:
         log.warning(f"[audit] {name} 读取失败: {e}")
         return None
