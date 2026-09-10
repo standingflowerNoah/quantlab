@@ -17,3 +17,4 @@ from . import dragon_seats_factor  # noqa: F401
 from . import highfreq           # noqa: F401
 from . import hf_composite       # noqa: F401
 from . import a191_composite     # noqa: F401
+from . import fundamental        # noqa: F401
