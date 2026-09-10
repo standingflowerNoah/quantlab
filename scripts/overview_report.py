@@ -242,7 +242,9 @@ def build_factor_panels(store: Store, flist: pd.DataFrame,
                         rmat: pd.DataFrame) -> list[dict]:
     """每因子：近 52 周周均 IC 迷你曲线 + 近 1 年头部净值迷你曲线 + 汇总指标
 
-    IC 口径：日内 pct-rank Spearman IC20，日频 → W-FRI 周均（IC 需 20 日
+    IC 双口径：IC20 = Pearson（原始值×方向 vs 原始 20 日前瞻收益，对极端值
+    敏感）；RankIC20 = 日内 pct-rank Spearman（秩口径，抗离群值，主评估口径，
+    ICIR 与周均迷你图均基于 RankIC 序列）。日频 → W-FRI 周均（IC 需 20 日
     前瞻，末端天然滞后约 1 个月）。头部净值：方向调整 rank top100、
     每 5 交易日等权调仓、近 1 年。
     """
@@ -271,7 +273,8 @@ def build_factor_panels(store: Store, flist: pd.DataFrame,
                 f"'{lake}/factor/{name}/part-*.parquet') WHERE date >= ?",
                 [win_start])
             if f.empty:
-                panels.append({**row, "ic_mean": None, "icir": None,
+                panels.append({**row, "ic_mean": None, "rank_ic": None,
+                               "icir": None,
                                "ic_svg": None, "nav_svg": None})
                 continue
             f["date"] = pd.to_datetime(f["date"])
@@ -279,25 +282,37 @@ def build_factor_panels(store: Store, flist: pd.DataFrame,
             f = f[np.isfinite(f["value"])].dropna()
             direction = FACTOR_DIRECTION.get(name, 1)
             f["r"] = f.groupby("date")["value"].rank(pct=True) * direction
+            f["v"] = f["value"] * direction     # 原始值×方向（Pearson 口径）
 
-            # ── 周均 IC（52 周）──
-            j = f[["date", "code", "r"]].merge(
+            # ── 日频双口径 IC：RankIC（pct-rank Spearman）+ IC（Pearson）──
+            j = f[["date", "code", "r", "v"]].merge(
                 fwd[["date", "code", "fwd", "fr"]],
                 on=["date", "code"], how="inner")
             g = j.groupby("date")
             n = g.size().astype(float)
+            # RankIC：秩 vs 秩（主口径，ICIR/周均迷你图基于此）
             mx, my = g["r"].mean(), g["fr"].mean()
             sxy = (j["r"] * j["fr"]).groupby(j["date"]).sum()
             sxx = (j["r"] ** 2).groupby(j["date"]).sum()
             syy = (j["fr"] ** 2).groupby(j["date"]).sum()
             cov = sxy / n - mx * my
             var = (sxx / n - mx ** 2) * (syy / n - my ** 2)
-            ic = (cov / np.sqrt(var.clip(lower=1e-18)))[n >= 300]
-            ic = ic[~ic.index.duplicated()].sort_index()
-            wk = ic.resample("W-FRI").mean().dropna() if len(ic) else []
-            ic_mean = float(ic.mean()) if len(ic) else None
-            icir = (float(ic.mean() / ic.std())
-                    if len(ic) > 5 and ic.std() > 0 else None)
+            ric = (cov / np.sqrt(var.clip(lower=1e-18)))[n >= 300]
+            ric = ric[~ric.index.duplicated()].sort_index()
+            wk = ric.resample("W-FRI").mean().dropna() if len(ric) else []
+            rank_ic = float(ric.mean()) if len(ric) else None
+            icir = (float(ric.mean() / ric.std())
+                    if len(ric) > 5 and ric.std() > 0 else None)
+            # Pearson IC：原始值 vs 原始收益（与 RankIC 互补，暴露极端值影响）
+            mx2, my2 = g["v"].mean(), g["fwd"].mean()
+            sxy2 = (j["v"] * j["fwd"]).groupby(j["date"]).sum()
+            sxx2 = (j["v"] ** 2).groupby(j["date"]).sum()
+            syy2 = (j["fwd"] ** 2).groupby(j["date"]).sum()
+            cov2 = sxy2 / n - mx2 * my2
+            var2 = (sxx2 / n - mx2 ** 2) * (syy2 / n - my2 ** 2)
+            pic = (cov2 / np.sqrt(var2.clip(lower=1e-18)))[n >= 300]
+            pic = pic[~pic.index.duplicated()].sort_index()
+            ic_mean = float(pic.mean()) if len(pic) else None
 
             # ── 近 1 年头部净值（周调 top100 等权）──
             f1 = f[f["date"] >= end - pd.Timedelta(days=371)]
@@ -317,7 +332,7 @@ def build_factor_panels(store: Store, flist: pd.DataFrame,
                 nav_dates.append(d1)
             nav_pts = nav[1:]
             panels.append({
-                **row, "ic_mean": ic_mean, "icir": icir,
+                **row, "ic_mean": ic_mean, "rank_ic": rank_ic, "icir": icir,
                 "ic_svg": _spark(list(wk), "#378add", zero=True),
                 "nav_svg": (_spark(nav_pts, "#e24b4a" if nav_pts[-1] >= 1
                                    else "#1d9e75") if nav_pts else None),
@@ -326,7 +341,8 @@ def build_factor_panels(store: Store, flist: pd.DataFrame,
             import traceback
             print(f"因子面板 {name} 失败: {traceback.format_exc()[-300:]}",
                   flush=True)
-            panels.append({**row, "ic_mean": None, "icir": None,
+            panels.append({**row, "ic_mean": None, "rank_ic": None,
+                           "icir": None,
                            "ic_svg": None, "nav_svg": None,
                            "err": str(e)[:60]})
     n_err = sum(1 for p in panels if p.get("err"))
@@ -555,14 +571,16 @@ def render(data_rows, flist, factor_panels, model_rows, payload_bt,
     factor_rows = ""
     n_ic = 0
     for p in factor_panels:
-        if p["ic_mean"] is not None:
+        if p["ic_mean"] is not None or p.get("rank_ic") is not None:
             n_ic += 1
         ic_cls = "pos" if (p["ic_mean"] or 0) > 0 else "neg"
+        ric_cls = "pos" if (p.get("rank_ic") or 0) > 0 else "neg"
         err_note = (f" <span class='muted'>(计算失败: {p['err']})</span>"
                     if p.get("err") else "")
         factor_rows += (
             f"<tr><td><code>{p['name']}</code></td><td>{p['category']}</td>"
             f"<td class='{ic_cls}'>{_ic(p['ic_mean'])}</td>"
+            f"<td class='{ric_cls}'>{_ic(p.get('rank_ic'))}</td>"
             f"<td>{_icir(p['icir'])}</td>"
             f"<td>{p['ic_svg'] or '—'}</td>"
             f"<td>{p['nav_svg'] or '—'}</td>"
@@ -880,12 +898,14 @@ details table{{margin:10px 0 4px;}}
 
 <span class="layer">L2 因子层</span>
 <h2>二、内置因子评估（{n_factors} 个）</h2>
-<p class="sub">IC 口径：日内 pct-rank Spearman IC20，取近 52 周周均（IC 需 20 日前瞻，
+<p class="sub">IC 双口径：IC20=Pearson（原始因子值×方向 vs 原始 20 日前瞻收益，
+对极端值敏感）；RankIC20=日内 pct-rank Spearman（秩口径，抗离群值，主评估口径）。
+ICIR 与周均迷你图为 RankIC 序列的近 52 周统计（IC 需 20 日前瞻，
 末端滞后约 1 个月）；头部净值：按因子方向取 rank top100、每 5 交易日等权调仓、
 近 1 年区间；迷你图红线上行=正贡献。{n_ic} 个因子有足够 IC 样本。</p>
 <table>
-<thead><tr><th>因子</th><th>类别</th><th>IC20 均值</th><th>ICIR</th>
-<th>周均 IC · 52周</th><th>头部净值 · 1年</th><th>说明</th></tr></thead>
+<thead><tr><th>因子</th><th>类别</th><th>IC20 均值</th><th>RankIC20 均值</th><th>ICIR</th>
+<th>周均 RankIC · 52周</th><th>头部净值 · 1年</th><th>说明</th></tr></thead>
 <tbody>{factor_rows}</tbody>
 </table>
 
