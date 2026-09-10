@@ -73,6 +73,86 @@ def secid(code: str) -> str:
     return f"1.{code}" if code.startswith(("6", "9")) else f"0.{code}"
 
 
+# ── 日 K 线（push2his，通达信 K 线故障时的兜底源） ────────────────
+def _kline_get(secid_str: str, lmt: int = 800, fqt: int = 0) -> list[str]:
+    """push2his 日K通用请求，返回 klines 字符串列表"""
+    url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+    params = {
+        "secid": secid_str, "klt": "101", "fqt": str(fqt),
+        "fields1": "f1,f2,f3,f4,f5,f6",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57",
+        "end": "20500101", "lmt": str(lmt),
+    }
+    headers = {"Referer": "https://quote.eastmoney.com/",
+               "Origin": "https://quote.eastmoney.com"}
+    r = em_get(url, params=params, headers=headers, timeout=20)
+    return (r.json().get("data") or {}).get("klines") or []
+
+
+def kline_daily(code: str, lmt: int = 800, start_date: str | None = None
+                ) -> pd.DataFrame:
+    """个股日K（东财 push2his，fqt=0 不复权），返回 tdx 兼容格式：
+    date/open/high/low/close/vol(股)/amount(元)
+    注：东财 klines 字段序 = 日期,开,收,高,低,量(手),额(元)，量需 ×100 转股。"""
+    try:
+        klines = _kline_get(secid(code), lmt=lmt, fqt=0)
+    except Exception as e:
+        log.warning(f"东财日K {code} 失败: {e}")
+        return pd.DataFrame()
+    rows = []
+    for line in klines:
+        p = line.split(",")
+        if len(p) < 7:
+            continue
+        try:
+            rows.append({
+                "date": pd.to_datetime(p[0]),
+                "open": float(p[1]), "close": float(p[2]),
+                "high": float(p[3]), "low": float(p[4]),
+                "vol": float(p[5]) * 100.0,      # 手 → 股
+                "amount": float(p[6]),           # 元
+            })
+        except (ValueError, IndexError):
+            continue
+    df = pd.DataFrame(rows)
+    if not df.empty and start_date:
+        df = df[df["date"] >= pd.to_datetime(start_date)]
+    return (df.sort_values("date").drop_duplicates(subset=["date"], keep="last")
+            .reset_index(drop=True)
+            if not df.empty else df)
+
+
+def kline_index(secid_str: str, lmt: int = 800,
+                start_date: str | None = None) -> pd.DataFrame:
+    """指数日K（东财 push2his），返回 date/open/high/low/close/volume。
+    指数无成交额，volume 单位=手（与通达信指数口径一致）。"""
+    try:
+        klines = _kline_get(secid_str, lmt=lmt, fqt=0)
+    except Exception as e:
+        log.warning(f"东财指数K {secid_str} 失败: {e}")
+        return pd.DataFrame()
+    rows = []
+    for line in klines:
+        p = line.split(",")
+        if len(p) < 6:
+            continue
+        try:
+            rows.append({
+                "date": pd.to_datetime(p[0]),
+                "open": float(p[1]), "close": float(p[2]),
+                "high": float(p[3]), "low": float(p[4]),
+                "volume": float(p[5]),
+            })
+        except (ValueError, IndexError):
+            continue
+    df = pd.DataFrame(rows)
+    if not df.empty and start_date:
+        df = df[df["date"] >= pd.to_datetime(start_date)]
+    return (df.sort_values("date").drop_duplicates(subset=["date"], keep="last")
+            .reset_index(drop=True)
+            if not df.empty else df)
+
+
 # ── 个股资金流（日级，最近120个交易日） ───────────────────────────
 def fund_flow_daily(code: str) -> pd.DataFrame:
     """主力/超大单/大单/中单/小单 日级净流入（元），最近120日"""
