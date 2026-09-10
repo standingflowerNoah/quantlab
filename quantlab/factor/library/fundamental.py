@@ -27,57 +27,79 @@ import os
 _DATA_ROOT = os.environ.get(
     "QUANTLAB_LAKE",
     "C:/Users/53497/WorkBuddy/2026-09-02-23-42-28/quantlab/data/lake/clean")
-_FQ = f"'{_DATA_ROOT}/fundamental/finance_q'"
-_VD = f"'{_DATA_ROOT}/fundamental/valuation_daily/part-*.parquet'"
+_FQ = f"{_DATA_ROOT}/fundamental/finance_q"
+_VD = f"{_DATA_ROOT}/fundamental/valuation_daily/part-*.parquet"
 
 # ── 公共 CTE ─────────────────────────────────────────────────────
-# income 阶梯：每股取披露日可见的最新报告期（同日多期取最新）
+# income 阶梯：PIT 三重防线
+# ① InfoPublDate IS NOT NULL 且 > EndDate（剔空壳行/非法行）
+# ② 压制剔除：若存在更晚报告期且其披露日更早（更正披露的旧期），
+#    该旧期行被剔除——否则 ASOF 按 pub 取行时，晚披露的旧期会错误
+#    覆盖已披露的新报告期（2026-09-11 质检发现，滞后>250天的
+#    更正行约占 5%）
+# ③ 同股同披露日多期 → 取最新报告期（QUALIFY）
 _INCOME_LADDER = f"""
 WITH inc AS (
     SELECT code, EndDate AS rp, InfoPublDate AS pub,
            OperatingRevenue, OperatingRevenueTTM,
            NPParentCompanyOwners, NPParentCompanyOwnersTTM,
+           NPParentCompanyOwners_Q,
            GrossProfitTTM, ROETTM, ROECut, ROIC,
-           NetProfitRatio_Q, NPParentCompanyYOY_Q,
-           OperatingRevenueGrowRate_Q
-    FROM read_parquet('{_FQ}/income/part-*.parquet')
+           NPParentCompanyYOY_Q, OperatingRevenueGrowRate_Q
+    FROM read_parquet('{_FQ}/income/part-*.parquet', union_by_name=true)
     WHERE InfoPublDate IS NOT NULL AND InfoPublDate > EndDate
+), sup AS (
+    SELECT *,
+           MIN(pub) OVER (PARTITION BY code ORDER BY rp DESC
+                          ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+                   ) AS later_rp_min_pub
+    FROM inc
+), kept AS (
+    SELECT * FROM sup
+    WHERE later_rp_min_pub IS NULL OR later_rp_min_pub > pub
 ), g AS (
     SELECT *, ROW_NUMBER() OVER (
         PARTITION BY code, pub ORDER BY rp DESC) AS rk
-    FROM inc QUALIFY rk = 1
+    FROM kept QUALIFY rk = 1
 )
 """
 
-# income+balance+cashflow 合并阶梯（质量复合因子原料）
+# income+balance+cashflow 合并阶梯（质量复合因子原料；PIT 防线同上）
 _FIN_LADDER = f"""
 WITH i AS (
     SELECT code, EndDate AS rp, InfoPublDate AS pub,
            NPParentCompanyOwnersTTM AS np_ttm, GrossProfitTTM,
            ROW_NUMBER() OVER (PARTITION BY code, EndDate ORDER BY pub DESC) AS rk
-    FROM read_parquet('{_FQ}/income/part-*.parquet')
+    FROM read_parquet('{_FQ}/income/part-*.parquet', union_by_name=true)
     WHERE InfoPublDate IS NOT NULL AND InfoPublDate > EndDate
 ), b AS (
     SELECT code, EndDate AS rp,
            TotalCurrentAssets + TotalNonCurrentAssets AS total_assets,
            SEWithoutMI,
            ROW_NUMBER() OVER (PARTITION BY code, EndDate ORDER BY InfoPublDate DESC) AS rk
-    FROM read_parquet('{_FQ}/balance/part-*.parquet')
-    WHERE InfoPublDate IS NOT NULL
+    FROM read_parquet('{_FQ}/balance/part-*.parquet', union_by_name=true)
+    WHERE InfoPublDate IS NOT NULL AND InfoPublDate > EndDate
 ), c AS (
     SELECT code, EndDate AS rp, NetOperateCashFlowTTM AS ocf_ttm,
            ROW_NUMBER() OVER (PARTITION BY code, EndDate ORDER BY InfoPublDate DESC) AS rk
-    FROM read_parquet('{_FQ}/cashflow/part-*.parquet')
-    WHERE InfoPublDate IS NOT NULL
+    FROM read_parquet('{_FQ}/cashflow/part-*.parquet', union_by_name=true)
+    WHERE InfoPublDate IS NOT NULL AND InfoPublDate > EndDate
 ), fin AS (
-    SELECT i.code, i.pub,
+    SELECT i.code AS code, i.pub AS pub, i.rp AS rp,
            i.np_ttm, i.GrossProfitTTM, b.total_assets, b.SEWithoutMI, c.ocf_ttm,
-           ROW_NUMBER() OVER (PARTITION BY code, i.pub ORDER BY i.rp DESC) AS rk2
+           ROW_NUMBER() OVER (PARTITION BY i.code, i.pub ORDER BY i.rp DESC) AS rk2
     FROM i JOIN b ON i.code=b.code AND i.rp=b.rp AND b.rk=1
            JOIN c ON i.code=c.code AND i.rp=c.rp AND c.rk=1
     WHERE i.rk = 1
+), sup AS (
+    SELECT *,
+           MIN(pub) OVER (PARTITION BY code ORDER BY rp DESC
+                          ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+                   ) AS later_rp_min_pub
+    FROM fin
 ), g AS (
-    SELECT * FROM fin QUALIFY rk2 = 1
+    SELECT * FROM sup
+    WHERE (later_rp_min_pub IS NULL OR later_rp_min_pub > pub) AND rk2 = 1
 )
 """
 
@@ -187,7 +209,7 @@ class Ep(SqlFactor):
         usql, uparams = universe_sql(universe)
         sql = f"""
 SELECT date, code, 1.0/pe_ttm AS value
-FROM read_parquet({_VD})
+FROM read_parquet('{_VD}')
 WHERE pe_ttm IS NOT NULL AND pe_ttm != 0 AND isfinite(1.0/pe_ttm) {usql}
 """
         return sql, uparams
@@ -204,7 +226,7 @@ class Bp(SqlFactor):
         usql, uparams = universe_sql(universe)
         sql = f"""
 SELECT date, code, 1.0/pb AS value
-FROM read_parquet({_VD})
+FROM read_parquet('{_VD}')
 WHERE pb IS NOT NULL AND pb != 0 AND isfinite(1.0/pb) {usql}
 """
         return sql, uparams
@@ -224,7 +246,7 @@ class SpTtm(SqlFactor):
 SELECT k.date, g.code,
        g.OperatingRevenueTTM / NULLIF(v.total_mv, 0) AS value
 FROM kline_daily k
-JOIN read_parquet({_VD}) v ON v.code = k.code AND v.date = k.date
+JOIN read_parquet('{_VD}') v ON v.code = k.code AND v.date = k.date
 ASOF JOIN g ON g.code = k.code AND g.pub <= k.date
 WHERE g.OperatingRevenueTTM IS NOT NULL
   AND v.total_mv > 0 AND isfinite(g.OperatingRevenueTTM / v.total_mv) {usql}
@@ -244,16 +266,23 @@ class CfpTtm(SqlFactor):
         sql = f"""
 WITH c AS (
     SELECT code, EndDate AS rp, InfoPublDate AS pub, NetOperateCashFlowTTM AS ocf_ttm
-    FROM read_parquet('{_FQ}/cashflow/part-*.parquet')
+    FROM read_parquet('{_FQ}/cashflow/part-*.parquet', union_by_name=true)
     WHERE InfoPublDate IS NOT NULL AND InfoPublDate > EndDate
+), sup AS (
+    SELECT *,
+           MIN(pub) OVER (PARTITION BY code ORDER BY rp DESC
+                          ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+                   ) AS later_rp_min_pub
+    FROM c
 ), g AS (
-    SELECT *, ROW_NUMBER() OVER (PARTITION BY code, pub ORDER BY rp DESC) AS rk
-    FROM c QUALIFY rk = 1
+    SELECT * FROM sup
+    WHERE later_rp_min_pub IS NULL OR later_rp_min_pub > pub
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY code, pub ORDER BY rp DESC) = 1
 )
 SELECT k.date, g.code,
        g.ocf_ttm / NULLIF(v.total_mv, 0) AS value
 FROM kline_daily k
-JOIN read_parquet({_VD}) v ON v.code = k.code AND v.date = k.date
+JOIN read_parquet('{_VD}') v ON v.code = k.code AND v.date = k.date
 ASOF JOIN g ON g.code = k.code AND g.pub <= k.date
 WHERE g.ocf_ttm IS NOT NULL AND v.total_mv > 0
   AND isfinite(g.ocf_ttm / NULLIF(v.total_mv, 0)) {usql}

@@ -20,7 +20,7 @@ print("=" * 70)
 print("1) finance_q 覆盖率")
 for t in ("income", "balance", "cashflow"):
     try:
-        q = f"read_parquet('{FQ}/{t}/part-*.parquet')"
+        q = f"read_parquet('{FQ}/{t}/part-*.parquet', union_by_name=true)"
         cnt, nc = con.execute(
             f"SELECT count(*), count(DISTINCT code) FROM {q}").fetchone()
         rng = con.execute(
