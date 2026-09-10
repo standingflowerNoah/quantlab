@@ -169,6 +169,9 @@ def main():
     out = pd.concat(results, ignore_index=True)
     out["date"] = pd.to_datetime(out["date"])
 
+    # 预落盘保护：训练 40 分钟的成果先存本地，再处理落湖（写锁可能被占）
+    out.to_parquet(_root / "reports" / "_gru_score.parquet", index=False)
+
     fwd_full = kl[["date", "code", "fwd"]]
     m = out.merge(fwd_full, on=["date", "code"], how="inner")
     ics = m.groupby("date").apply(
@@ -195,7 +198,17 @@ def main():
     print(ics_y.groupby("year")["ic"].agg(["mean", "count"]).round(4).to_string())
 
     from quantlab.data.store import Store
-    store = Store()
+    store = None
+    for i in range(120):                      # 写锁等待：最多 2 小时
+        try:
+            store = Store()
+            break
+        except Exception as e:
+            if i == 0:
+                print(f"等待 DuckDB 写锁（{e.__class__.__name__}）...", flush=True)
+            time.sleep(60)
+    if store is None:
+        raise RuntimeError("DuckDB 写锁等待超时")
     out["date"] = out["date"].dt.date
     store.factor_dir("gru_seq_score").mkdir(parents=True, exist_ok=True)
     out.to_parquet(str(store.factor_dir("gru_seq_score") / "part-b00001.parquet"),
