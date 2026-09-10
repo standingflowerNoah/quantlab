@@ -5,6 +5,7 @@ click==8.5.0
 cloudpickle==3.1.2
 cryptography==50.0.1
 duckdb==1.5.5
+fastapi==0.141.1
 idna==3.19
 joblib==1.6.0
 lightgbm==4.7.0
@@ -23,4 +24,5 @@ six==1.17.0
 threadpoolctl==3.6.0
 tzdata==2026.3
 urllib3==2.7.0
+uvicorn==0.52.4
 xlrd==2.0.2
