@@ -641,10 +641,14 @@ def render(data_rows, flist, factor_panels, model_rows, payload_bt,
             f"<td>{_fmt(m['icir'], pct=False)}</td></tr>")
 
     # ── 纸面前向账本（含中证1000 超额）──
+    # 模型曲线首点补 (起算日, 1.0)：首次快照日收盘建仓，与基准同起点对齐
     paper_payload = []
     for name, c in paper_curves.items():
         pts = [[str(pd.Timestamp(d).date()), round(float(v), 4)]
                for d, v in zip(c["date"], c["nav"])]
+        start = paper_starts.get(name)
+        if start and (not pts or pts[0][0] > start):
+            pts = [[start, 1.0]] + pts
         paper_payload.append([name, pts])
 
     # 基准：窗口 = [该模型首次快照日, 末次盯市日]，起点归一 1.0
@@ -654,14 +658,25 @@ def render(data_rows, flist, factor_panels, model_rows, payload_bt,
             return pd.Series(dtype=float)
         return w / w.iloc[0]
 
-    # 图表基准线：全部账本窗口 [最早快照日, 最晚盯市日]
-    pbm_pts = []
+    # 图表基准线：按账本起算日分组归一——每条基准与同批模型同日 1.0 起步，
+    # 避免不同起始日模型共用一条全局归一基准造成的起点错位
+    pbm_pts = []          # [label, color, pts]
     if paper_curves and paper_starts:
-        g_start = min(paper_starts.values())
-        g_end = max(pd.to_datetime(c["date"]).max() for c in paper_curves.values())
-        bnav = _bm_nav(g_start, g_end)
-        pbm_pts = [[str(pd.Timestamp(d).date()), round(float(v), 4)]
+        g_end = max(pd.to_datetime(c["date"]).max()
+                    for c in paper_curves.values())
+        clusters: dict[str, list[str]] = {}
+        for name, s in paper_starts.items():
+            clusters.setdefault(s, []).append(name)
+        grays = ["#98a1b0", "#c6ccd6", "#828c9b", "#b0b7c3"]
+        for rank, (s, members) in enumerate(
+                sorted(clusters.items(), key=lambda kv: (-len(kv[1]), kv[0]))):
+            bnav = _bm_nav(s, g_end)
+            if bnav.empty:
+                continue
+            label = f"中证1000（{s[5:]}起·{len(members)}模型）"
+            pts = [[str(pd.Timestamp(d).date()), round(float(v), 4)]
                    for d, v in bnav.items()]
+            pbm_pts.append([label, grays[rank % len(grays)], pts])
 
     paper_meta = {}
     prod_cum = None
@@ -896,8 +911,9 @@ details table{{margin:10px 0 4px;}}
 <span class="layer">L5 决策层</span>
 <h2>五、纸面前向账本（全模型）</h2>
 <p class="sub">信号快照记录于每日流水线，逐日盯市，与回测独立的前向验证账本。
-账本自 2026-09-07 同日起算，满 60 交易日后（约 2026-12）双闸门裁决；
-所有模型同图呈现（灰虚线=中证1000），点击图例聚焦。超额 = 累计收益 − 同窗口基准收益。</p>
+各模型净值自其首次快照日（建仓日收盘）归一 1.0；基准按起算日分组绘制，
+每条灰虚线与同起始日模型同日 1.0 起步，点击图例聚焦。满 60 交易日后（约 2026-12）双闸门裁决；
+超额 = 累计收益 − 同起算日窗口基准收益（见下表）。</p>
 <div id="chartPaper" class="chart" style="height:380px"></div>
 <table>
 <thead><tr><th>模型</th><th>纸面天数</th><th>累计收益</th><th>超额 vs 中证1000</th><th>相对现役 PROD</th></tr></thead>
@@ -958,11 +974,11 @@ const axis={{axisLine:{{lineStyle:{{color:line}}}},axisLabel:{{color:gray}},spli
     emphasis: {{focus: 'series'}},
     data: pts
   }}));
-  if(P.pbm && P.pbm.length) series.push({{name: '中证1000', type: 'line',
-    smooth: false, symbol: 'none',
-    lineStyle: {{width: 1.5, color: gray, type: 'dashed'}},
-    itemStyle: {{color: gray}}, emphasis: {{focus: 'series'}},
-    data: P.pbm}});
+  (P.pbm || []).forEach(([label, color, pts]) => series.push({{
+    name: label, type: 'line', smooth: false, symbol: 'none',
+    lineStyle: {{width: 1.3, color: color, type: 'dashed'}},
+    itemStyle: {{color: color}}, emphasis: {{focus: 'series'}},
+    data: pts}}));
   echarts.init(document.getElementById('chartPaper')).setOption({{
     grid:{{left:60,right:30,top:60,bottom:40}},
     tooltip:{{trigger:'axis'}},
