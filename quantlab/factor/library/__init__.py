@@ -10,6 +10,7 @@ from . import intraday_split     # noqa: F401
 from . import chip               # noqa: F401
 from . import volume_event       # noqa: F401
 from . import behavior           # noqa: F401
+from . import quality_fund       # noqa: F401
 from . import holder             # noqa: F401
 from . import value_anomaly      # noqa: F401
 from . import dragon_seats_factor  # noqa: F401
