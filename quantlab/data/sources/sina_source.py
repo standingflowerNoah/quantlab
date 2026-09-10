@@ -64,3 +64,29 @@ def all_a_shares(max_pages: int = 80) -> pd.DataFrame:
         "turnover_pct": pd.to_numeric(df["turnoverratio"], errors="coerce"),
     })
     return out.drop_duplicates(subset=["code"]).reset_index(drop=True)
+
+
+_KLINE_URL = ("http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+              "CN_MarketData.getKLineData")
+
+
+def index_daily(symbol: str, datalen: int = 800) -> pd.DataFrame:
+    """新浪指数日K，返回 date/open/high/low/close/volume(手)
+
+    指数日历/K线的 TDX 兜底源（2026-09-09/10 TDX 服务器池连续宕机实证可用）。
+    symbol 形如 sh000300 / sz399006。volume 新浪口径=股，÷100 对齐通达信手。
+    """
+    r = requests.get(_KLINE_URL, params={"symbol": symbol, "scale": "240",
+                                         "ma": "no", "datalen": str(datalen)},
+                     headers=HEADERS, timeout=20,
+                     proxies={"http": None, "https": None})
+    r.raise_for_status()
+    data = r.json()
+    if not isinstance(data, list):
+        return pd.DataFrame()
+    return pd.DataFrame([{
+        "date": pd.to_datetime(x["day"]),
+        "open": float(x["open"]), "high": float(x["high"]),
+        "low": float(x["low"]), "close": float(x["close"]),
+        "volume": float(x["volume"]) / 100.0,   # 股 → 手（对齐通达信口径）
+    } for x in data])
