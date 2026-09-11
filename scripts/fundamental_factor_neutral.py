@@ -24,11 +24,14 @@ H_GRID = [5, 10, 20, 40, 60]
 TOPN = 100
 START = pd.Timestamp("2022-01-04")
 OOS_START = pd.Timestamp("2025-01-01")
-FACTORS = [
+_BATCH1 = [
     "ep", "bp", "sp_ttm", "cfp_ttm",
     "roe_ttm", "roe_cut", "roic", "gpoa", "accruals2", "ocf_to_profit",
     "np_q_yoy", "rev_q_yoy",
 ]
+_BATCH2 = ["sue_v2", "sur", "sue_gpoa", "roe_chg", "gpoa_chg", "ep_z5", "garp"]
+FACTORS = sys.argv[1:] if len(sys.argv) > 1 else _BATCH1
+_SUFFIX = "_b2" if FACTORS == _BATCH2 else ""
 
 con = duckdb.connect()
 VD = str((ROOT / "data/lake/clean/fundamental/valuation_daily").as_posix())
@@ -161,7 +164,7 @@ for f in FACTORS:
     print(f"  [{f}] 中性化完成", flush=True)
 
 df = pd.DataFrame(rows)
-df.to_csv(OUT / "factor_screen_neutral.csv", index=False)
+df.to_csv(OUT / f"factor_screen_neutral{_SUFFIX}.csv", index=False)
 print(f"\n完成 {len(df)} 条 → factor_screen_neutral.csv", flush=True)
 
 print("\n=== 中性化后 h=20 · 全期 ===")

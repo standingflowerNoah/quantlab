@@ -28,11 +28,14 @@ H_GRID = [5, 10, 20, 40, 60]
 TOPN = 100
 START = pd.Timestamp("2022-01-04")
 OOS_START = pd.Timestamp("2025-01-01")
-FACTORS = [
+_BATCH1 = [
     "ep", "bp", "sp_ttm", "cfp_ttm",
     "roe_ttm", "roe_cut", "roic", "gpoa", "accruals2", "ocf_to_profit",
     "np_q_yoy", "rev_q_yoy",
 ]
+_BATCH2 = ["sue_v2", "sur", "sue_gpoa", "roe_chg", "gpoa_chg", "ep_z5", "garp"]
+FACTORS = sys.argv[1:] if len(sys.argv) > 1 else _BATCH1
+_SUFFIX = "_b2" if FACTORS == _BATCH2 else ""
 
 con = duckdb.connect()
 panel = pd.read_parquet(ROOT / "reports/dividend_factor/panel.parquet")
@@ -155,9 +158,9 @@ for f in FACTORS:
     print(f"  [{f}] 完成 coverage={cov:.2f}", flush=True)
 
 df = pd.DataFrame(rows)
-df.to_csv(OUT / "factor_screen.csv", index=False)
+df.to_csv(OUT / f"factor_screen{_SUFFIX}.csv", index=False)
 ldf = pd.DataFrame(layer_rows)
-ldf.to_csv(OUT / "layer_screen.csv", index=False)
+ldf.to_csv(OUT / f"layer_screen{_SUFFIX}.csv", index=False)
 print(f"\n完成 {len(df)} 条评估 / {len(ldf)} 条分层 → reports/fundamental_factor/", flush=True)
 
 # 摘要：h=20 全期
