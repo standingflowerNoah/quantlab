@@ -77,6 +77,10 @@ _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 # 服务端硬性并发上限：超过即 429 "请不要超过5个线程"
 MAX_WORKERS = 5
 
+# 单请求超时。服务端正常 1.4~9s；偶尔会长时间不响应，
+# 超时太大会让 worker 长挂（曾出现 1 小时只推进 50 只的停滞）。
+REQ_TIMEOUT = 25.0
+
 FLUSH_ROWS = 2_000_000  # 缓冲到该行数即落盘
 CHUNK = "month"         # 切段粒度：month（唯一安全值）
 
@@ -153,8 +157,9 @@ class RateLimiter:
 LIMITER: RateLimiter = RateLimiter(60)
 
 
-def api(api_name: str, params: dict, retry: int = 8, timeout: int = 180) -> dict:
+def api(api_name: str, params: dict, retry: int = 8, timeout: float | None = None) -> dict:
     """调用代理接口。代理隧道偶发 502、且对 stk_mins 有速率限制，均需重试。"""
+    timeout = REQ_TIMEOUT if timeout is None else timeout
     body = json.dumps(
         {"api_name": api_name, "token": TOKEN, "params": params, "fields": ""}
     ).encode()
@@ -200,15 +205,35 @@ def fetch_calendar(start: str, end: str) -> list[str]:
 
 
 def month_chunks(start: str, end: str) -> list[tuple[date, date]]:
-    """把 [start, end] 拆成自然月区间（右开）。"""
+    """把 [start, end] 拆成自然月区间（左闭右闭）。仅用于回退与对照。"""
     s = datetime.strptime(start, "%Y-%m-%d").date().replace(day=1)
     e = datetime.strptime(end, "%Y-%m-%d").date()
     out = []
     y, m = s.year, s.month
     while date(y, m, 1) <= e:
         nxt = date(y + 1, 1, 1) if m == 12 else date(y, m + 1, 1)
-        out.append((date(y, m, 1), nxt))
+        out.append((date(y, m, 1), nxt - timedelta(days=1)))
         y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    return out
+
+
+def trading_chunks(days: list[str], size: int) -> list[tuple[date, date]]:
+    """按**交易日**分组切段（左闭右闭）。
+
+    为什么不用自然月：服务端单次响应延迟与 payload 大小**基本无关**
+    （实测 trade_cal 289B 与 stk_mins 399KB 都是 7~9s），因此
+    「每次请求塞进尽可能多的行」是唯一的提速杠杆。
+    单次上限 8000 行 → 1min 最多约 33 个交易日（33×241=7953）。
+    自然月只有约 5061 行，利用率仅 63%；按 32 个交易日切段利用率升到 96%，
+    请求数从 36 次/年 降到 8 次/年（2024：36→8，全区间 36→22.7）。
+    """
+    out = []
+    for i in range(0, len(days), size):
+        blk = days[i:i + size]
+        out.append((
+            datetime.strptime(blk[0], "%Y%m%d").date(),
+            datetime.strptime(blk[-1], "%Y%m%d").date(),
+        ))
     return out
 
 
@@ -249,7 +274,7 @@ ROW_CAP = 8000  # 服务端单次返回上限；触顶会「静默截断」，�
 
 
 def _fetch_span(ts_code: str, s: date, e: date, freq: str) -> list:
-    """拉取 [s, e] 区间。若返回行数触顶（8000），说明被静默截断，自动二分重取。"""
+    """拉取 [s, e]（左闭右闭）。若返回行数触顶（8000），说明被静默截断，自动二分重取。"""
     d = api("stk_mins", {
         "ts_code": ts_code,
         "freq": freq,
@@ -262,15 +287,16 @@ def _fetch_span(ts_code: str, s: date, e: date, freq: str) -> list:
     if s >= e:
         log.error("%s %s 单日即触顶（%d 行），无法再拆分", ts_code, s, len(items))
         return items
-    mid = s + (e - s) / 2
+    mid = s + timedelta(days=max((e - s).days // 2, 0))   # 注意 date 不支持分数天
     log.warning("%s %s~%s 返回 %d 行触顶，二分重取", ts_code, s, e, len(items))
-    return _fetch_span(ts_code, s, mid, freq) + _fetch_span(ts_code, mid + timedelta(days=1), e, freq)
+    return (_fetch_span(ts_code, s, mid, freq)
+            + _fetch_span(ts_code, min(mid + timedelta(days=1), e), e, freq))
 
 
-def pull_stock(ts_code: str, months: list[tuple[date, date]], freq: str) -> pd.DataFrame:
+def pull_stock(ts_code: str, segs: list[tuple[date, date]], freq: str) -> pd.DataFrame:
     frames = []
-    for s, e in months:
-        items = _fetch_span(ts_code, s, e - timedelta(days=1), freq)
+    for s, e in segs:
+        items = _fetch_span(ts_code, s, e, freq)
         if items:
             frames.append(pd.DataFrame(
                 items,
@@ -360,9 +386,11 @@ def run_backfill(args: argparse.Namespace) -> None:
     start_ymd = args.start.replace("-", "")
     end_ymd = args.end.replace("-", "")
 
-    months = month_chunks(args.start, args.end)
     days = fetch_calendar(start_ymd, end_ymd)
-    log.info("区间 %s ~ %s : %d 个自然月, %d 个交易日", args.start, args.end, len(months), len(days))
+    segs = trading_chunks(days, args.chunk_tdays)
+    log.info("区间 %s ~ %s : %d 个交易日 -> %d 段（每段 %d 个交易日，约 %d 行）",
+             args.start, args.end, len(days), len(segs),
+             args.chunk_tdays, args.chunk_tdays * 241)
 
     codes = load_universe(start_ymd, end_ymd)
     if args.limit:
@@ -371,7 +399,7 @@ def run_backfill(args: argparse.Namespace) -> None:
     codes = [c for c in codes if not c.startswith(("000300", "000905", "000852", "399006"))]
     log.info("标的数 %d", len(codes))
 
-    years = sorted({s.year for s, _ in months} | {e.year for _, e in months})
+    years = sorted({s.year for s, _ in segs} | {e.year for _, e in segs})
     for y in years:
         d = LAKE_1MIN / f"year={y}"
         if not d.exists():
@@ -417,7 +445,7 @@ def run_backfill(args: argparse.Namespace) -> None:
     # future 只回传行数（int），并在 as_completed 里 pop 掉已完成项。
     def work(code: str):
         ts = to_ts_code(code)
-        df = pull_stock(ts, months, args.freq)
+        df = pull_stock(ts, segs, args.freq)
         n = len(df)
         if n:
             with lock:
@@ -484,7 +512,7 @@ def run_verify(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    global LIMITER
+    global LIMITER, REQ_TIMEOUT
     p = argparse.ArgumentParser(description="用 tushare 代理回填历史分钟 K 线")
     p.add_argument("--start", required=True, help="起始月 YYYY-MM")
     p.add_argument("--end", required=True, help="结束月 YYYY-MM")
@@ -494,6 +522,11 @@ def main() -> None:
     p.add_argument("--rate", type=float, default=240.0,
                    help="全局请求速率上限（次/分钟）。5 并发直连实测约 210，默认留余量。")
     p.add_argument("--limit", type=int, default=0, help="只处理前 N 只（冒烟测试）")
+    p.add_argument("--chunk-tdays", type=int, default=32,
+                   help="每段包含的交易日数（默认 32）。上限约 33（33×241=7953 < 8000 行）。"
+                        "服务端单次延迟与 payload 无关，所以段越大越快；触顶会被自动二分。")
+    p.add_argument("--timeout", type=float, default=25.0,
+                   help="单请求超时秒数。服务端正常 1.4~9s，超时即快速重试，避免 worker 长挂。")
     p.add_argument("--verify-only", action="store_true")
     p.add_argument("--dry-run", action="store_true", help="只拉取不落盘，用于冒烟测试")
     p.add_argument("--outdir", default=None, help="覆盖输出根目录（默认湖内 kline_1min）")
@@ -516,7 +549,9 @@ def main() -> None:
         run_verify(args)
     else:
         LIMITER = RateLimiter(args.rate)
-        log.info("限速 %.0f 请求/分钟, 并发 %d", args.rate, args.workers)
+        REQ_TIMEOUT = args.timeout
+        log.info("限速 %.0f 请求/分钟, 并发 %d, 超时 %.0fs",
+                 args.rate, args.workers, REQ_TIMEOUT)
         run_backfill(args)
 
 

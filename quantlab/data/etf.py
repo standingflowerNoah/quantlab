@@ -9,8 +9,20 @@
 - `is_etf` 由名称是否含 'ETF' 判定（数据驱动，不靠代码前缀猜）
 
 湖结构：
-  data/lake/clean/etf_daily/year=YYYY/part-dYYYYMMDD.parquet
+  data/lake/clean/etf_daily/year=YYYY/part-dYYYYMMDD.parquet   每日增量
+  data/lake/clean/etf_daily/year=YYYY/part-full.parquet        历史回补（按年）
 （按日落文件、同名覆盖=幂等；写入前 anti-join 已有 (code, date)）
+
+⚠️ 历史深度（2026-09-11 实测，scripts/probe_fsdb_etf_history.py）：
+  fsdb `日k` 对全部 2,053 只基金代码**都有历史**，合计 2,303,259 行，
+  最早 2004-03-22。但字段完整度分两段：
+    - OHLCV + amount：全历史 100% 完整
+    - pre_close / turnover / total_share / total_mv：**仅 2026-07-01 起**有
+      （ETF 历史段是精简 schema；股票 600519 同字段 100% 有）
+  → 下游算换手/市值/涨跌幅时必须容忍这段空洞；pre_close 本就应自算
+    （LAG(close) + 分红除权，见 MEMORY「fsdb pre_close 不可信」）。
+  ⚠️ 另有 43 只标的起始被截断在 2024-01-02（非上市日，如 159903/159915 老
+     基金）→ 属数据边界，回补也无法补齐，需在大全/替代源补。
 """
 from __future__ import annotations
 
@@ -99,15 +111,8 @@ def update_etf_daily(target: pd.Timestamp | str | None = None,
         log.warning(f"ETF 日线 {day.date()} 无数据（缺 {miss} 只）")
         return 0
 
-    df = pd.concat(frames, ignore_index=True)
+    df = _normalize(frames)
     df = df.rename(columns={"volume": "volume"})
-    df["date"] = pd.to_datetime(df["date"], format="%Y%m%d", errors="coerce")
-    df = df[df["date"].notna()]
-    df["is_etf"] = df["name"].fillna("").str.contains("ETF", case=False)
-    for c in KEEP_COLS:
-        if c not in df.columns:
-            df[c] = None
-    df = df[KEEP_COLS]
 
     # anti-join 已有 (code, date)：同一日重复运行不产生重复行
     ex = _existing_keys(day)
@@ -135,6 +140,122 @@ def update_etf_daily(target: pd.Timestamp | str | None = None,
     return len(df)
 
 
+def _normalize(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    """合并多只标的的原始返回，统一列与 dtype"""
+    df = pd.concat(frames, ignore_index=True)
+    df["date"] = pd.to_datetime(df["date"], format="%Y%m%d", errors="coerce")
+    df = df[df["date"].notna()]
+    df["is_etf"] = df["name"].fillna("").astype(str).str.contains(
+        "ETF", case=False)
+    for c in KEEP_COLS:
+        if c not in df.columns:
+            df[c] = None
+    return df[KEEP_COLS]
+
+
+def backfill_etf_daily(start: str = "19900101", end: str | None = None,
+                       codes: list[str] | None = None,
+                       workers: int = 4) -> dict:
+    """全历史回补 ETF/基金日线 → year=YYYY/part-full.parquet（按年一个文件）
+
+    与每日增量 part-dYYYYMMDD.parquet 共存，互不重叠：
+      part-full 覆盖「回补时点及之前」，part-d* 只含回补之后的新增日。
+    重复运行幂等（同年 part-full 整体覆盖重写）。
+
+    返回 {"rows": n, "codes": n, "years": n, "miss": n, "elapsed": s}
+    """
+    if codes is None:
+        codes = fs.fund_codes()
+    end = end or pd.Timestamp.now().strftime("%Y%m%d")
+    log.info(f"ETF 历史回补 {start}~{end}：候选 {len(codes)} 只")
+
+    fs.ensure_healthy()
+    frames, miss, t0 = [], 0, time.time()
+
+    def _fetch(code: str) -> pd.DataFrame | None:
+        try:
+            d = fs.day_bars(code, start, end)
+        except Exception as e:                               # noqa: BLE001
+            log.debug(f"ETF 回补 {code} 失败: {e}")
+            return None
+        if d is None or d.empty or (d["code"] != code).any():
+            return None
+        return d
+
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = {ex.submit(_fetch, c): c for c in codes}
+        for i, fut in enumerate(as_completed(futs), 1):
+            d = fut.result()
+            if d is None or d.empty:
+                miss += 1
+            else:
+                frames.append(d)
+            if i % 500 == 0:
+                log.info(f"  进度 {i}/{len(codes)} ({time.time()-t0:.0f}s)")
+
+    if not frames:
+        log.warning("ETF 历史回补：无任何数据返回")
+        return {"rows": 0, "codes": 0, "years": 0, "miss": miss,
+                "elapsed": round(time.time() - t0, 1)}
+
+    df = _normalize(frames)
+    # 同日多文件并存时以回补数据为准，去重保护
+    df = df.drop_duplicates(subset=["code", "date"], keep="last")
+
+    years = 0
+    for y, g in df.groupby(df["date"].dt.year):
+        f = ETF_DIR / f"year={int(y)}" / "part-full.parquet"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        g = g.sort_values(["code", "date"])
+        # 与已有 part-full 合并（部分回补 --codes 时不能抹掉该年其他标的）
+        if f.exists():
+            try:
+                cur = pd.read_parquet(f)
+                cur["date"] = pd.to_datetime(cur["date"])
+                for c in KEEP_COLS:
+                    if c not in cur.columns:
+                        cur[c] = None
+                g = pd.concat([cur[KEEP_COLS], g], ignore_index=True)
+                g = g.drop_duplicates(subset=["code", "date"], keep="last")
+                g = g.sort_values(["code", "date"])
+            except Exception as e:                           # noqa: BLE001
+                log.warning(f"  已存 part-full 合并失败（{y}）: {e}")
+        # 合并该年已有的每日增量文件（回补覆盖近端时会与之重叠）
+        parts = sorted(f.parent.glob("part-d*.parquet"))
+        old_frames = []
+        for p in parts:
+            try:
+                old_frames.append(pd.read_parquet(p))
+            except Exception:                                # noqa: BLE001
+                continue
+        if old_frames:
+            old = pd.concat(old_frames, ignore_index=True)
+            old["date"] = pd.to_datetime(old["date"])
+            for c in KEEP_COLS:
+                if c not in old.columns:
+                    old[c] = None
+            g = pd.concat([old[KEEP_COLS], g], ignore_index=True)
+            g = g.drop_duplicates(subset=["code", "date"], keep="last")
+            g = g.sort_values(["code", "date"])
+        g.to_parquet(f, index=False, compression="zstd")
+        years += 1
+        # 内容已并入 part-full → 删除被吸收的增量文件，避免同 (code,date) 双份
+        gone = 0
+        for p in parts:
+            try:
+                p.unlink()
+                gone += 1
+            except Exception as e:                           # noqa: BLE001
+                log.warning(f"  旧增量文件未能删除 {p.name}: {e}")
+        log.info(f"  年 {int(y)}: {len(g)} 行 → {f.name}"
+                 + (f"（吸收并清理 {gone} 个增量文件）" if gone else ""))
+
+    log.info(f"ETF 历史回补完成：{len(df)} 行 / {years} 年 / 缺 {miss} 只"
+             f" / 耗时 {time.time()-t0:.0f}s")
+    return {"rows": int(len(df)), "codes": int(df["code"].nunique()),
+            "years": years, "miss": miss, "elapsed": round(time.time() - t0, 1)}
+
+
 def load_etf_daily(start: str | None = None, end: str | None = None,
                    etf_only: bool = True) -> pd.DataFrame:
     """读取 ETF 日线（glob 直读 parquet，不依赖 DuckDB）"""
@@ -146,6 +267,8 @@ def load_etf_daily(start: str | None = None, end: str | None = None,
     if "year" in df.columns:             # hive 分区列回填，避免误导
         df = df.drop(columns=["year"])
     df["date"] = pd.to_datetime(df["date"])
+    # part-full 与 part-d* 可能对同一 (code,date) 各留一份 → 去重
+    df = df.drop_duplicates(subset=["code", "date"], keep="last")
     if etf_only and "is_etf" in df.columns:
         df = df[df["is_etf"]]
     if start:
