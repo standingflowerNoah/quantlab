@@ -12,7 +12,12 @@
 - 单次上限：**8000 行**。按月切段（~5100 行）安全；按 30 交易日切段会触发服务端
   **静默截断**（实测丢 50/726 天），务必按自然月切。
 - 只支持按 `ts_code` 单只查询，无「按日全市场」批量模式。
-- 限流：并发 12 实测无 429；本机 HTTP 代理偶发 Tunnel 502，必须重试。
+- **⚠️ 硬并发上限 = 5 个连接**：超过即返回 `429 请不要超过5个线程`（实测并发 12 时
+  288 次请求里 142 次被拒）。**这不是速率限制而是连接数限制**，调速率参数无用，
+  必须把 workers 压到 ≤5。并发 5 直连可持续 ~210 req/min。
+- **⚠️ 必须绕开本机 HTTP 代理隧道**：本机全局 `https_proxy=http://127.0.0.1:57092`，
+  走代理偶发 502 且延迟从 1.4s 抬到 4.5s。脚本已在导入时清除代理 env 并用
+  `ProxyHandler({})` 直连。
 - 价格：**不复权原始价**，与 fsdb 同源（12 只样本中 9 只逐根字节级一致），
   日总量差 < 50 股；少数票存在 2~4% 的分钟量能重分配 → 跨源混用需注意。
 
@@ -59,6 +64,18 @@ TOKEN = os.environ.get(
     "65cc2e7b8c4266142c1bc426db6d4c16f183531d34f7e701833f1790",
 )
 URL = "https://t.xiaodefa.top/"
+
+# ⚠️ 本机全局挂了 HTTP 代理隧道（env https_proxy=http://127.0.0.1:57092），
+# 走代理会偶发 502 且延迟从 1.5s 抬到 4.5s。此源可直连，必须绕开代理。
+for _k in ("http_proxy", "https_proxy", "all_proxy",
+           "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+    os.environ.pop(_k, None)
+os.environ["no_proxy"] = "*"
+os.environ["NO_PROXY"] = "*"
+_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+# 服务端硬性并发上限：超过即 429 "请不要超过5个线程"
+MAX_WORKERS = 5
 
 FLUSH_ROWS = 2_000_000  # 缓冲到该行数即落盘
 CHUNK = "month"         # 切段粒度：month（唯一安全值）
@@ -150,7 +167,7 @@ def api(api_name: str, params: dict, retry: int = 8, timeout: int = 180) -> dict
                 data=body,
                 headers={"Content-Type": "application/json", "Accept-Encoding": "gzip"},
             )
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with _OPENER.open(req, timeout=timeout) as r:
                 raw = r.read()
                 enc = r.headers.get("Content-Encoding")
             if enc == "gzip":
@@ -160,8 +177,8 @@ def api(api_name: str, params: dict, retry: int = 8, timeout: int = 180) -> dict
                 msg = str(d.get("msg"))
                 if "区间超限" in msg or "必填参数" in msg or "接口名" in msg:
                     raise ValueError(f"{api_name} {msg}")
-                if "过快" in msg:
-                    # 指数退避 + 全局冷却，避免所有 worker 同时撞限流
+                if "过快" in msg or "不要超过" in msg:
+                    # 指数退避 + 全局冷却，避免所有 worker 同时撞限制
                     back = min(3.0 * (2 ** a), 60.0)
                     LIMITER.penalize(back)
                     last = RuntimeError(f"限流: {msg}")
@@ -381,6 +398,11 @@ def run_backfill(args: argparse.Namespace) -> None:
     todo = [c for c in codes if c not in done]
     log.info("已完成 %d, 待处理 %d", len(done), len(todo))
 
+    if args.workers > MAX_WORKERS:
+        log.warning("workers=%d 超过服务端硬上限 %d（会触发 429 请不要超过5个线程），已钳制",
+                    args.workers, MAX_WORKERS)
+        args.workers = MAX_WORKERS
+
     init_seq()
     writer = Writer(args.outdir, args.dry_run)
     lock = threading.Lock()
@@ -457,9 +479,10 @@ def main() -> None:
     p.add_argument("--start", required=True, help="起始月 YYYY-MM")
     p.add_argument("--end", required=True, help="结束月 YYYY-MM")
     p.add_argument("--freq", default="1min", choices=["1min", "5min", "15min", "30min", "60min"])
-    p.add_argument("--workers", type=int, default=8)
-    p.add_argument("--rate", type=float, default=60.0,
-                   help="全局请求速率上限（次/分钟）。代理限流约在 100~150 次/分，默认留足余量。")
+    p.add_argument("--workers", type=int, default=MAX_WORKERS,
+                   help=f"并发连接数。本代理硬上限 {MAX_WORKERS}，超出会被 429 拒绝，脚本自动钳制。")
+    p.add_argument("--rate", type=float, default=240.0,
+                   help="全局请求速率上限（次/分钟）。5 并发直连实测约 210，默认留余量。")
     p.add_argument("--limit", type=int, default=0, help="只处理前 N 只（冒烟测试）")
     p.add_argument("--verify-only", action="store_true")
     p.add_argument("--dry-run", action="store_true", help="只拉取不落盘，用于冒烟测试")

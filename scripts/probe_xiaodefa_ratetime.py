@@ -18,6 +18,14 @@ from datetime import date
 TOKEN = "65cc2e7b8c4266142c1bc426db6d4c16f183531d34f7e701833f1790"
 URL = "https://t.xiaodefa.top/"
 
+# 本机全局 HTTP 代理隧道（env https_proxy=127.0.0.1:57092）会 502 并抬高延迟，必须绕开
+import os as _os
+for _k in ("http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+    _os.environ.pop(_k, None)
+_os.environ["no_proxy"] = "*"
+_os.environ["NO_PROXY"] = "*"
+_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
 MONTHS = [(date(y, m, 1), (date(y, m + 1, 1) if m < 12 else date(y + 1, 1, 1)))
           for y in (2022, 2023, 2024) for m in range(1, 13)]
 
@@ -32,7 +40,7 @@ def call(params, stats, stop_at):
             URL, data=body,
             headers={"Content-Type": "application/json", "Accept-Encoding": "gzip"},
         )
-        with urllib.request.urlopen(req, timeout=90) as r:
+        with _OPENER.open(req, timeout=90) as r:
             raw = r.read()
             if r.headers.get("Content-Encoding") == "gzip":
                 raw = gzip.decompress(raw)
