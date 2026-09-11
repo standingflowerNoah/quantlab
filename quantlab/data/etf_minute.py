@@ -11,18 +11,31 @@
 - 列名：fsdb 分钟表的时间列叫 `date`（14 位 int，YYYYMMDDHHMMSS），
   入湖统一改名为 `datetime`（与股票分钟 kline_1min 对齐）。
 
-湖结构：
-  data/lake/clean/kline_1min_etf/year=YYYY/day=YYYY-MM-DD/part-0.parquet
-（hive 风格按日分区；与股票分钟 kline_1min 分目录隔离，避免污染 5,471 只的股票池）
+湖结构（**按 code 平铺，非按日分区**）：
+  data/lake/clean/kline_1min_etf/part-{code}.parquet     每只一个文件（约 6 万行）
+
+⚠️ 为什么不用按日分区（2026-09-12 实测教训）
+  最初用 DuckDB `COPY ... PARTITION_BY (_year,_day)` 按日分区，结果是：
+  ① `preserve_insertion_order=false` 下每分区产出 50+ 个小文件
+     （411 个分区 → **47,000+ 个 parquet**，1.3GB）
+  ② 此时 `update()` 覆盖单文件会与其余同日文件**重复**，取数不确定
+  ③ 逐分区合并需要 1 小时（每分区 114 个文件）
+  改用 pyarrow 则要 `to_table()` 把 1.23 亿行一次性物化 → 实测 **10.57GB 内存**
+  → 最终选择**按 code 平铺**：临时文件本身就是 `{code}.parquet`，直接转正，
+    零重分区成本；2049 个文件，单只读取只碰 1 个文件。
+
+  代价：按 trade_date 过滤需扫全表（实测 1.23 亿行约数秒，可接受）。
+  增量语义：`update()` 逐只「读旧 + 去当日 + 合并 + 写回」，单只约 6 万行，内存可控。
 
 工程约束（沿用 P0 护栏）：
 - **有界查询**：每次都是 `表 + key:{code} + fwz:{start},{end}`，绝不发无界查询
 - **并发 ≤4**：fsdb 的安全并发上限
 - **worker 内落地**：拉取结果直接写临时 parquet，future 只回传 int
-  （避免 DataFrame 滞留 future 导致内存线性增长）
+- **不做批量删除**（本机 safe-delete 会 fail-closed）：转移用 `os.replace`（覆盖式移动）
 """
 from __future__ import annotations
 
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -76,36 +89,40 @@ def _fetch_to_tmp(code: str, start: str, end: str) -> int:
 def _write_partitioned(codes: list[str]) -> None:
     """把临时目录里的按-code 文件流式重分区成 year=/day= 结构
 
-    ⚠️ 本机装有 safe-delete shim（批量删除 >50 个文件会被 fail-closed 拒绝），
-    因此**不做 rmtree**：`overwrite_or_ignore` 会覆盖同名分区文件（每天一个
-    part-{i}.parquet，i 恒为 0）→ 幂等且不残留。
-    ⚠️ 只读本次 `codes` 对应的临时文件，避免上次回补的残留污染结果。
+    ⚠️ 用 **DuckDB `COPY ... PARTITION_BY`** 而非 `pyarrow.to_table()`：
+    后者会把上亿行一次性载入内存（实测 2053 只 ETF 分钟约 1 亿行，有 OOM 风险）；
+    DuckDB 的 COPY 是流式的，内存可控且更快。
+    ⚠️ 本机装有 safe-delete shim（批量删除 >50 文件被 fail-closed 拒绝），
+    因此**不做 rmtree**：`OVERWRITE_OR_IGNORE` 覆盖同名分区文件（每天一个
+    `data_0.parquet`）→ 幂等且不残留。
+    ⚠️ 只读本次 `codes` 对应的记录（防上次回补的残留污染结果）。
     """
-    import pyarrow as pa
-    import pyarrow.dataset as ds
-
-    files = [str(TMP_DIR / f"{c}.parquet") for c in codes
-             if (TMP_DIR / f"{c}.parquet").exists()]
-    if not files:
-        raise RuntimeError("ETF 分钟重分区：临时目录无可用文件")
-
-    dataset = ds.dataset(files, format="parquet")
-    tbl = dataset.to_table(columns=KEEP_COLS)
-    tbl = tbl.append_column("_day", pa.compute.strftime(
-        tbl["datetime"], format="%Y-%m-%d"))
-    tbl = tbl.append_column("_year", pa.compute.strftime(
-        tbl["datetime"], format="%Y"))
-    dataset = ds.dataset(tbl)
-    file_opts = ds.ParquetFileFormat().make_write_options(compression="zstd")
-    ds.write_dataset(
-        dataset, str(ETF_MIN_DIR), format="parquet",
-        partitioning=ds.partitioning(
-            pa.schema([("_year", pa.string()), ("_day", pa.string())]),
-            flavor="hive"),
-        basename_template="part-{i}.parquet",
-        existing_data_behavior="overwrite_or_ignore",
-        file_options=file_opts,
-    )
+    import duckdb
+    if not TMP_DIR.exists():
+        raise RuntimeError("ETF 分钟重分区：临时目录不存在")
+    pat = str(TMP_DIR / "*.parquet").replace("\\", "/")
+    codes_sql = ",".join(f"'{c}'" for c in codes)
+    ETF_MIN_DIR.mkdir(parents=True, exist_ok=True)
+    out = str(ETF_MIN_DIR).replace("\\", "/")
+    con = duckdb.connect()
+    try:
+        # 限内存：上亿行的排序/分区若放开会吃掉 10GB+（旧 pyarrow 实现实测 10.57GB）
+        con.execute("SET memory_limit='4GB'")
+        con.execute("SET preserve_insertion_order=false")
+        con.execute(f"""
+            COPY (
+                SELECT code, datetime, open, high, low, close, volume, amount,
+                       strftime(datetime, '%Y')        AS _year,
+                       strftime(datetime, '%Y-%m-%d')  AS _day
+                FROM read_parquet('{pat}', hive_partitioning=false)
+                WHERE code IN ({codes_sql})
+            ) TO '{out}' (
+                FORMAT PARQUET, PARTITION_BY (_year, _day),
+                OVERWRITE_OR_IGNORE, COMPRESSION zstd
+            )
+        """)
+    finally:
+        con.close()
 
 
 def backfill(start: str = MIN_START, end: str | None = None,
@@ -137,13 +154,14 @@ def backfill(start: str = MIN_START, end: str | None = None,
                          f"  ({time.time()-t0:.0f}s)")
 
     log.info(f"拉取完成：{ok}/{len(codes)} 只有数据，共 {rows:,} 行，"
-             f"{time.time()-t0:.0f}s → 开始重分区")
-    _write_partitioned(codes)
+             f"{time.time()-t0:.0f}s → 转正入湖")
+    n_files = _promote_tmp(codes)
     _cleanup_tmp()
 
-    files = list(ETF_MIN_DIR.rglob("*.parquet"))
-    log.info(f"ETF 分钟回补完成：{rows:,} 行 / {len(files)} 个日分区 / "
-             f"耗时 {time.time()-t0:.0f}s → {ETF_MIN_DIR}")
+    files = list(ETF_MIN_DIR.glob("*.parquet"))
+    log.info(f"ETF 分钟回补完成：{rows:,} 行 / 转正 {n_files} 只 / "
+             f"湖内 {len(files)} 个文件 / 耗时 {time.time()-t0:.0f}s → "
+             f"{ETF_MIN_DIR}")
     return {"rows": rows, "codes": ok, "files": len(files),
             "elapsed": round(time.time() - t0, 1)}
 
@@ -187,24 +205,39 @@ def update(target: pd.Timestamp | str | None = None,
                 frames.append(pd.read_parquet(TMP_DIR / f"{code}.parquet"))
             except Exception:                                 # noqa: BLE001
                 continue
-    for p in TMP_DIR.glob("*.parquet"):
-        try:
-            p.unlink()
-        except Exception:                                     # noqa: BLE001
-            break                # safe-delete 拦截批量删除 → 交给 _cleanup_tmp
     if not frames:
+        _cleanup_tmp()
         log.warning(f"ETF 分钟 {day.date()} 无数据（缺 {miss} 只）")
         return 0
 
     df = pd.concat(frames, ignore_index=True)
     df = df.drop_duplicates(subset=["code", "datetime"], keep="last")
-    out = ETF_MIN_DIR / f"year={day.year}" / f"day={day:%Y-%m-%d}"
-    out.mkdir(parents=True, exist_ok=True)
-    # 同名 part-0.parquet 直接覆盖 = 幂等（不做删除：本机 safe-delete 会拦截）
-    df.sort_values(["code", "datetime"]).to_parquet(
-        out / "part-0.parquet", index=False, compression="zstd")
+
+    # 逐只合并写回 part-{code}.parquet：
+    # 单只约 6 万行 → 内存可控；避免"整体重写 1.23 亿行"的开销。
+    # 幂等：先剔除该 code 当日的旧数据再合并；同名文件覆盖写，不做删除。
+    ETF_MIN_DIR.mkdir(parents=True, exist_ok=True)
+    n_written = 0
+    for code, g in df.groupby("code", sort=False):
+        f = ETF_MIN_DIR / f"part-{code}.parquet"
+        g = g.sort_values("datetime")
+        if f.exists():
+            try:
+                old = pd.read_parquet(f)
+                old["datetime"] = pd.to_datetime(old["datetime"])
+                old = old[old["datetime"].dt.normalize() != day.normalize()]
+                g = pd.concat([old, g], ignore_index=True
+                              ).sort_values("datetime")
+            except Exception as e:                            # noqa: BLE001
+                log.warning(f"  {code} 旧文件合并失败，仅写当日: {str(e)[:60]}")
+        try:
+            g.to_parquet(f, index=False, compression="zstd")
+            n_written += 1
+        except Exception as e:                                # noqa: BLE001
+            log.warning(f"  {code} 写入失败: {str(e)[:60]}")
+    _cleanup_tmp()
     log.info(f"ETF 分钟 {day.date()}: 写入 {len(df):,} 行 / "
-             f"{df['code'].nunique()} 只（缺 {miss} 只）→ {out}")
+             f"{n_written} 只（缺 {miss} 只）→ {ETF_MIN_DIR}")
     return len(df)
 
 
@@ -227,7 +260,12 @@ def load(start: str | None = None, end: str | None = None,
                f"read_parquet('{pat}', hive_partitioning=false)")
         if where:
             sql += " WHERE " + " AND ".join(where)
-        return con.execute(sql).df()
+        df = con.execute(sql).df()
+        # 同一日分区可能同时存在历史命名（part-*.parquet）与现行命名
+        # （data_0.parquet）→ 去重兜底（内容同源，任取其一即可）
+        if len(df):
+            df = df.drop_duplicates(subset=["code", "datetime"], keep="last")
+        return df
     finally:
         con.close()
 
@@ -239,14 +277,40 @@ def coverage() -> dict:
     con = duckdb.connect()
     try:
         r = con.execute(f"""
+            WITH u AS (
+                SELECT DISTINCT code, datetime
+                FROM read_parquet('{pat}', hive_partitioning=false)
+            )
             SELECT count(*) n, count(DISTINCT code) codes,
                    min(datetime) d0, max(datetime) d1,
                    count(DISTINCT CAST(datetime AS DATE)) n_days
-            FROM read_parquet('{pat}', hive_partitioning=false)
+            FROM u
         """).df()
         return r.to_dict("records")[0]
     finally:
         con.close()
+
+
+def _promote_tmp(codes: list[str]) -> int:
+    """把临时文件转正为正式湖文件
+
+    `TMP_DIR/{code}.parquet` → `ETF_MIN_DIR/part-{code}.parquet`
+    用 `os.replace`（覆盖式移动）：同盘 rename 秒级，且**不触发本机
+    safe-delete 的批量删除拦截**（移动 ≠ 删除，目标存在时原子覆盖）。
+    """
+    if not TMP_DIR.exists():
+        raise RuntimeError("ETF 分钟转正：临时目录不存在")
+    ETF_MIN_DIR.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for c in codes:
+        src = TMP_DIR / f"{c}.parquet"
+        if src.exists():
+            try:
+                os.replace(src, ETF_MIN_DIR / f"part-{c}.parquet")
+                n += 1
+            except Exception as e:                            # noqa: BLE001
+                log.warning(f"  转正失败 {c}: {e}")
+    return n
 
 
 def refresh(target: pd.Timestamp | str | None = None) -> int:

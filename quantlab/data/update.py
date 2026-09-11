@@ -200,7 +200,7 @@ def update_all(date=None, domains: list[str] | None = None,
     run("share_capital", lambda: update_share_capital(date))
     # 3.10 ETF 分钟（fsdb 源，2026-09-12 接入）
     #      边界 2025-01-02 起（与股票分钟同边界），单日 240~242 根**不固定**。
-    #      湖 kline_1min_etf/year=YYYY/day=YYYY-MM-DD/，与股票分钟分目录隔离。
+    #      湖 kline_1min_etf/part-{code}.parquet（按 code 平铺），与股票分钟分目录隔离。
     #      首次使用需先跑 scripts/backfill_etf_dataset.py --what minute 全量回补。
     from .etf_minute import update as update_etf_minute
     run("etf_minute", lambda: update_etf_minute(date))
