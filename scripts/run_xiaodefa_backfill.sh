@@ -28,11 +28,34 @@ echo "=== 启动 $(date '+%F %T')  workers=$WORKERS rate=$RATE chunk_tdays=$CHUN
 
 for Y in $YEARS; do
     echo "--- 开始 $Y $(date '+%F %T') ---" | tee -a "$LOG"
-    "$PY" scripts/backfill_minute_xiaodefa.py \
-        --start "${Y}-01" --end "${Y}-12" \
-        --workers "$WORKERS" --rate "$RATE" --chunk-tdays "$CHUNK_TDAYS" 2>&1 | tee -a "$LOG"
-    RC=${PIPESTATUS[0]}
-    echo "--- 结束 $Y rc=$RC $(date '+%F %T') ---" | tee -a "$LOG"
+    # 逐年重试：2026-09-12 00:09 曾出现子进程静默崩溃（rc=1、无异常栈、无"完成"行），
+    # 旧版调度会直接跳到下一年 → 2024 只跑完 2520/5329 就"结束"了。
+    # 现在：① -X faulthandler 捕获段错误栈 ② 非零退出自动重试（进度文件保证续跑不重拉）
+    for ATTEMPT in 1 2 3 4 5 6; do
+        echo "  [尝试 $ATTEMPT] $(date '+%F %T')" | tee -a "$LOG"
+        "$PY" -X faulthandler scripts/backfill_minute_xiaodefa.py \
+            --start "${Y}-01" --end "${Y}-12" \
+            --workers "$WORKERS" --rate "$RATE" --chunk-tdays "$CHUNK_TDAYS" 2>&1 | tee -a "$LOG"
+        RC=${PIPESTATUS[0]}
+        if [ "$RC" -eq 0 ]; then
+            echo "--- 结束 $Y rc=0 $(date '+%F %T') ---" | tee -a "$LOG"
+            break
+        fi
+        echo "--- $Y 第 $ATTEMPT 次异常退出 rc=$RC，5s 后续跑 $(date '+%F %T') ---" | tee -a "$LOG"
+        sleep 5
+    done
+    # 收尾核对：落盘股票数 vs kline_daily 该年宇宙，不足则明确告警（不静默跳过）
+    "$PY" - "$Y" <<'PYEOF' 2>&1 | tee -a "$LOG"
+import sys, duckdb
+y = sys.argv[1]
+con = duckdb.connect()
+got = con.execute(f"SELECT count(DISTINCT code) FROM read_parquet('data/lake/clean/kline_1min/year={y}/*.parquet')").fetchone()[0]
+want = con.execute(f"""SELECT count(DISTINCT code) FROM read_parquet('data/lake/clean/mirror/kline_daily.parquet')
+                       WHERE date >= '{y}-01-01' AND date <= '{y}-12-31'""").fetchone()[0]
+n = con.execute(f"SELECT count(*) FROM read_parquet('data/lake/clean/kline_1min/year={y}/*.parquet')").fetchone()[0]
+flag = "✅ 完整" if got >= want - 5 else "⚠️ 不完整"
+print(f"[核对] {y}: 分钟 {got} 只 / 日线宇宙 {want} 只 | {n:,} 行 | {flag}")
+PYEOF
 done
 
 echo "=== 全部完成 $(date '+%F %T') ===" | tee -a "$LOG"

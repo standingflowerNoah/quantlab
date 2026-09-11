@@ -19,7 +19,7 @@ warnings.filterwarnings("ignore")
 import pandas as pd
 
 from quantlab.config import (FACTOR_DIR, REPORTS_DIR, DUCKDB_PATH,
-                             KLINE_1MIN_DIR, LAKE_DIR)
+                             KLINE_1MIN_DIR, LAKE_DIR, CLEAN_DIR)
 from quantlab.data.store import query
 
 # 各数据域：表名 → (中文名, 日期列, 更新频率, 数据源, 披露截止)
@@ -32,6 +32,7 @@ DOMAINS = {
     "trade_calendar":   ("交易日历", "trade_date", "年", "自维护", None),
     "instruments":      ("股票主表", "updated_at", "周", "新浪+通达信", None),
     "daily_snapshot":   ("当日估值快照", "date", "日", "腾讯", None),
+    "share_capital_daily": ("PIT逐日股本", "date", "日", "free-stockdb", None),
     "finance_snapshot": ("财务快照", "report_date", "周触发", "通达信", None),
     "dragon_tiger":     ("龙虎榜", "date", "日", "东财", None),
     "margin_total":     ("两融余额", "date", "日", "东财", None),
@@ -44,10 +45,48 @@ DOMAINS = {
     "fund_flow_daily":  ("个股资金流", "date", "日", "东财", None),
     "signal_portfolio": ("纸面组合台账", "date", "日", "内部", None),
     "crowding":         ("拥挤度监控(Parquet湖)", "date", "日(5日采样)", "内部", None),
+    # —— 基本面族（主库表）——
+    "finance_history":  ("财务多期(历史版)", "notice_date", "季报披露", "腾讯", None),
+    "dividend_events":  ("除权除息事件(复权依赖)", "date", "日", "通达信", None),
+    "perf_forecast":    ("业绩预告", "notice_date", "季报披露", "东财", None),
+    "share_capital_daily": ("股本日线", "date", "日", "fsdb", None),
+    "goodwill_snapshot": ("商誉快照", "notice_date", "季报", "东财", None),
+    # —— Parquet 湖域（直读，见 _LAKE_SPECS）——
+    "fundamental_finance_q": ("财报三表多期(腾讯源)", "InfoPublDate", "季报披露", "westock", None),
+    "fundamental_valuation_daily": ("个股估值日线(pe/pb/市值)", "date", "日", "fsdb", None),
+    "etf_daily":        ("ETF日线(2053只·2004起)", "date", "日", "fsdb", None),
+    "board_member":     ("概念板块成份(快照)", "date", "日", "fsdb", None),
+    "board_meta":       ("概念板块清单(快照)", "date", "日", "fsdb", None),
+    "bond_yield":       ("国债收益率(2/5/10/30y)", "date", "日", "中债", None),
+    "dividend_announce": ("分红预案公告", "announce_date", "半年触发", "公开源", None),
+    "index_kline_ext":  ("扩展指数K线(红利/等权)", "date", "日", "中证", None),
+    "index_members_ext": ("扩展指数成份(红利池)", "eff_date", "静态名单", "中证", None),
+    "minute_feat":      ("分钟特征因子层(派生)", "date", "日", "内部", None),
 }
 
-# Parquet 直读域：不依赖 DuckDB 表/镜像（写锁占用期间仍可正确统计）
-_PARQUET_DOMAINS = {"kline_1min", "crowding"}
+# Parquet 湖直读规格：表名 → (CLEAN_DIR 内相对 glob, 日期列)。
+# hive_partitioning=false：文件内自带日期列，year=/snap= 分区目录仅作组织。
+_LAKE_SPECS = {
+    "kline_1min":       ("kline_1min/**/*.parquet", "datetime"),
+    "crowding":         (None, "date"),  # 特判：单文件 history.parquet
+    "fundamental_finance_q": ("fundamental/finance_q/**/*.parquet", "InfoPublDate"),
+    "fundamental_valuation_daily": ("fundamental/valuation_daily/**/*.parquet", "date"),
+    "etf_daily":        ("etf_daily/**/*.parquet", "date"),
+    "board_member":     ("board/board_member/**/*.parquet", "date"),
+    "board_meta":       ("board/board_meta/**/*.parquet", "date"),
+    "bond_yield":       ("bond_yield/**/*.parquet", "date"),
+    "dividend_announce": ("dividend_announce/**/*.parquet", "announce_date"),
+    "index_kline_ext":  ("index_kline_ext/**/*.parquet", "date"),
+    "index_members_ext": ("index_members_ext/**/*.parquet", "eff_date"),
+    "minute_feat":      ("minute_feat/**/*.parquet", "date"),
+}
+
+# 域新鲜度容忍天数（相对最新交易日，超过即标"滞后"红）：
+# 日频域默认 3；披露驱动（财报/预告/商誉按报告期集中披露）与静态名单放宽。
+_TOL = {
+    "fundamental_finance_q": 45, "finance_history": 45, "perf_forecast": 45,
+    "goodwill_snapshot": 45, "dividend_announce": 180, "index_members_ext": 365,
+}
 
 
 def _db_locked() -> bool:
@@ -63,21 +102,20 @@ def _db_locked() -> bool:
 
 def _parquet_stats(table: str):
     """Parquet 湖域直读统计：返回 (行数, 最新日期) 或抛异常"""
-    if table == "kline_1min":
-        import duckdb as _dk
-        con = _dk.connect()
-        try:
-            pat = str(KLINE_1MIN_DIR / "**" / "*.parquet").replace("\\", "/")
-            r = con.execute(
-                f"SELECT COUNT(*), MAX(datetime) FROM read_parquet("
-                f"'{pat}', hive_partitioning=1)").fetchone()
-            return int(r[0]), r[1]
-        finally:
-            con.close()
     if table == "crowding":
         h = pd.read_parquet(LAKE_DIR / "crowding" / "history.parquet")
         return len(h), pd.to_datetime(h["date"]).max()
-    raise ValueError(f"unknown parquet domain: {table}")
+    rel, dcol = _LAKE_SPECS[table]
+    import duckdb as _dk
+    con = _dk.connect()
+    try:
+        pat = str(CLEAN_DIR / rel).replace("\\", "/")
+        r = con.execute(
+            f"SELECT COUNT(*), MAX({dcol}) FROM read_parquet("
+            f"'{pat}', hive_partitioning=false, union_by_name=true)").fetchone()
+        return int(r[0]), r[1]
+    finally:
+        con.close()
 
 
 def _latest_trade_date():
@@ -92,7 +130,7 @@ def domain_table():
     locked = _db_locked()
     for t, (cn, dcol, freq, src, cutoff) in DOMAINS.items():
         mirror_missing = False
-        if t in _PARQUET_DOMAINS:
+        if t in _LAKE_SPECS:
             # Parquet 湖直读：不受 DuckDB 写锁影响
             try:
                 n, mx = _parquet_stats(t)
@@ -115,7 +153,9 @@ def domain_table():
                 days_ago = (base_td - pd.to_datetime(mx)).days
             except Exception:
                 days_ago = None
-        # 状态灯：日频域落后基准日>3天=红；1-3天=黄；0=绿；非日频/低频=绿
+        # 状态灯：超过容忍天数（日频默认 3，披露驱动/静态名单放宽）=红；
+        # 1~容忍=黄；0=绿；低频/快照域按 _TOL 放宽
+        tol = _TOL.get(t, 3)
         if mirror_missing:
             status, cls = "镜像未含（更新中）", "gray"
         elif n == 0:
@@ -125,12 +165,13 @@ def domain_table():
         elif days_ago <= 0:
             status = "健康" + (f"（披露止{cutoff}）" if cutoff else "")
             cls = "ok"
-        elif days_ago <= 3:
+        elif days_ago <= tol:
             status, cls = f"落后{days_ago}天", "warn"
         else:
             status, cls = f"滞后{days_ago}天", "bad"
         size = _table_size(t)
-        rows.append({"table": t, "cn": cn, "src": src, "freq": freq,
+        disp = f"lake/{t}" if t in _LAKE_SPECS else t
+        rows.append({"table": disp, "cn": cn, "src": src, "freq": freq,
                      "rows": n, "latest": str(mx)[:10] if mx else "-",
                      "days_ago": days_ago, "status": status, "cls": cls,
                      "size": size})
@@ -462,7 +503,10 @@ code{{font-family:ui-monospace,Consolas,monospace;color:#1d4ed8;font-size:12px;}
 <thead><tr><th>表</th><th>说明</th><th>源</th><th>频率</th><th>行数</th><th>最新记录</th><th>状态</th></tr></thead>
 <tbody>{dom_tr}</tbody>
 </table>
-<p class="note">状态口径：相对最新交易日（trade_calendar 水位），日频域 0 天=健康 / 1-3 天=落后 / >3 天=滞后。</p>
+<p class="note">状态口径：相对最新交易日（trade_calendar 水位）；日频域 0 天=健康 / 1~容忍=落后 / &gt;容忍=滞后。
+容忍天数默认 3，披露驱动域放宽（财报/业绩预告/商誉=45，分红公告=180，静态名单=365）。
+表名 lake/ 前缀 = Parquet 湖直读（clean 层，不受 DuckDB 写锁影响），其余为主库 DuckDB 表。
+披露类域以最新披露日为水位（财报季披露期天然滞后，非数据缺失）；dividend_events/lockup 含未来生效日，属正常。</p>
 <div id="chartFresh" class="chart"></div>
 
 <h2>二、K 线覆盖深度</h2>
