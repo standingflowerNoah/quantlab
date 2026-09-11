@@ -181,12 +181,35 @@ def update_all(date=None, domains: list[str] | None = None,
             store.register_dataset(_d, "clean", "free-stockdb", "daily", _desc)
         except Exception as e:                               # noqa: BLE001
             log.debug(f"注册数据集 {_d} 失败: {e}")
-    for _d in ("etf_daily", "board_map"):
-        if str(results.get(_d, "")).startswith(("ok", "degraded")):
-            try:
-                store.set_watermark(_d, target)
-            except Exception as e:                           # noqa: BLE001
-                log.debug(f"设置水位 {_d} 失败: {e}")
+    # 水位必须取"实际落库的最新日期"，不能用请求的 target：
+    # 例如 fsdb 尚未同步当日数据时 etf_daily 会写 0 行，若按 target 记水位
+    # 就会让水位跑到数据前面（下游误判当日已有数据）
+    def _etf_actual_max():
+        try:
+            from .etf import load_etf_daily
+            df = load_etf_daily(etf_only=False)
+            return df["date"].max() if len(df) else None
+        except Exception:                                    # noqa: BLE001
+            return None
+
+    def _board_actual_max():
+        try:
+            from .board import _latest_snapshot, META_DIR
+            return _latest_snapshot(META_DIR, None)
+        except Exception:                                    # noqa: BLE001
+            return None
+
+    for _d, _actual in (("etf_daily", _etf_actual_max()),
+                        ("board_map", _board_actual_max())):
+        if not str(results.get(_d, "")).startswith(("ok", "degraded")):
+            continue
+        if _actual is None:
+            log.warning(f"{_d} 未写入任何数据，跳过水位登记")
+            continue
+        try:
+            store.set_watermark(_d, _actual)
+        except Exception as e:                               # noqa: BLE001
+            log.debug(f"设置水位 {_d} 失败: {e}")
     # 4. 特色数据
     from .feature.dragon_tiger import update_dragon_tiger
     from .feature.eastmoney_features import (update_margin, update_lockup,
