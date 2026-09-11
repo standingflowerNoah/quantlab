@@ -410,31 +410,41 @@ def run_backfill(args: argparse.Namespace) -> None:
     n_ok = n_fail = 0
     fail_detail: dict[str, str] = {}
 
+    # ⚠️ 内存陷阱：不要把 DataFrame 作为 future 的返回值。
+    # `futs = {submit(...): code for code in todo}` 会让**全部** future 常驻，
+    # 而已完成的 future 仍持有自己的结果 → 每只股票约 3.8 MB 永不释放，
+    # 跑 5000 只要 19 GB，必 OOM。正确做法：在 worker 内部完成落盘，
+    # future 只回传行数（int），并在 as_completed 里 pop 掉已完成项。
     def work(code: str):
         ts = to_ts_code(code)
         df = pull_stock(ts, months, args.freq)
-        return code, df, None
+        n = len(df)
+        if n:
+            with lock:
+                writer.add(df)
+        del df
+        return n
 
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
         futs = {ex.submit(work, c): c for c in todo}
-        for i, fut in enumerate(as_completed(futs), 1):
-            code = futs[fut]
+        for fut in as_completed(list(futs)):
+            code = futs.pop(fut, None)   # 立即释放 future 及其结果
             try:
-                _, df, _ = fut.result()
-                with lock:
-                    writer.add(df)
-                    done.add(code)
-                    n_ok += 1
-                    if n_ok % 50 == 0:
+                n = fut.result()
+                done.add(code)
+                n_ok += 1
+                if n_ok % 50 == 0:
+                    with lock:          # writer 由 work() 在锁内写入，flush 也必须同锁
                         writer.flush()
-                        if not args.dry_run:
-                            cur["done"] = sorted(done)
-                            cur["failed"] = fail_detail
-                            save_progress(prog_all)
-                        el = time.time() - t0
-                        log.info("进度 %d/%d (%.1f%%)  %.0f 只/分钟  ETA %.1f h",
-                                 n_ok, len(todo), n_ok / len(todo) * 100,
-                                 n_ok / el * 60, (len(todo) - n_ok) / (n_ok / el) / 3600)
+                    if not args.dry_run:
+                        cur["done"] = sorted(done)
+                        cur["failed"] = fail_detail
+                        save_progress(prog_all)
+                    el = time.time() - t0
+                    log.info("进度 %d/%d (%.1f%%)  %.0f 只/分钟  限流 %d 次  ETA %.1f h",
+                             n_ok, len(todo), n_ok / len(todo) * 100,
+                             n_ok / el * 60, LIMITER.n_throttle,
+                             (len(todo) - n_ok) / max(n_ok / el, 1e-9) / 3600)
             except Exception as e:  # noqa: BLE001
                 n_fail += 1
                 fail_detail[code] = str(e)[:200]
