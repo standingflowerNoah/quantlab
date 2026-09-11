@@ -56,9 +56,34 @@ log = get_logger(__name__)
 
 ETF_DIR = config.CLEAN_DIR / "etf_daily"
 
-KEEP_COLS = ["date", "code", "name", "open", "high", "low", "close",
-             "pre_close", "volume", "amount", "turnover", "pct_chg",
+KEEP_COLS = ["date", "code", "name", "name_latest", "open", "high", "low",
+             "close", "pre_close", "volume", "amount", "turnover", "pct_chg",
              "amplitude", "total_share", "total_mv", "is_etf"]
+
+
+def _fill_names(df: pd.DataFrame) -> pd.DataFrame:
+    """用近期观测到的名称反填全历史（→ name_latest）
+
+    ⚠️ fsdb `日k` 的 ETF 历史段是**精简 schema**：`name` 只有 2026-07-01 起有
+    （全表非空率 4.6%）。缺 name 会让 `is_etf` 在历史段恒为 False，
+    把 96% 的 ETF 行误判成非 ETF，`load_etf_daily(etf_only=True)` 直接丢数据。
+
+    基金名称是准静态属性（改名极少且不影响"是不是 ETF"），故取每个 code
+    **最新已知名称**反填到其全部历史行。
+    ⚠️ `name_latest` 不是 PIT 严格字段；原始 `name` 列保持不动，
+       需要 PIT 语义时用 `name`，需要全历史标识时用 `name_latest`。
+    """
+    if "name" not in df.columns:
+        df["name_latest"] = None
+        return df
+    known = (df.loc[df["name"].notna(), ["code", "date", "name"]]
+             .sort_values("date")
+             .drop_duplicates("code", keep="last")
+             .set_index("code")["name"])
+    df["name_latest"] = df["code"].map(known)
+    log.info(f"  名称反填：{known.size} 只可判定 / "
+             f"{df['code'].nunique()} 只（覆盖 {df['name_latest'].notna().mean():.1%} 行）")
+    return df
 
 
 def _fetch_one(code: str, start: str, end: str) -> pd.DataFrame | None:
@@ -141,16 +166,19 @@ def update_etf_daily(target: pd.Timestamp | str | None = None,
 
 
 def _normalize(frames: list[pd.DataFrame]) -> pd.DataFrame:
-    """合并多只标的的原始返回，统一列与 dtype"""
+    """合并多只标的的原始返回，统一列与 dtype（含名称反填 + is_etf 判定）"""
     df = pd.concat(frames, ignore_index=True)
     df["date"] = pd.to_datetime(df["date"], format="%Y%m%d", errors="coerce")
     df = df[df["date"].notna()]
-    df["is_etf"] = df["name"].fillna("").astype(str).str.contains(
-        "ETF", case=False)
     for c in KEEP_COLS:
         if c not in df.columns:
             df[c] = None
-    return df[KEEP_COLS]
+    df = df[KEEP_COLS]
+    df = _fill_names(df)
+    # is_etf 基于 name_latest（全历史可靠），而非仅有近期值的 name
+    df["is_etf"] = (df["name_latest"].fillna("").astype(str)
+                    .str.contains("ETF", case=False))
+    return df
 
 
 def backfill_etf_daily(start: str = "19900101", end: str | None = None,
