@@ -800,9 +800,18 @@ def render(data_rows, flist, factor_panels, model_rows, payload_bt,
         '<h3>7.2 纸面账本健康</h3>' + ledger_html)
 
     # ── 头部卡片 ──
-    sig_day = max(paper_meta.values(), key=lambda x: x["start"],
-                  default=None)
-    sig_day_s = sig_day["start"] if sig_day else "—"
+    # 信号日 = 生产账本（signal_portfolio）最新快照日；兜底取各模型最大快照日。
+    # 旧逻辑误用"最新创建纸面账本的起始日"（paper_meta.start），与信号日无关。
+    sig_day_s = None
+    if screener.get("PROD"):
+        sig_day_s = screener["PROD"].get("date")
+    if not sig_day_s and screener:
+        dates = [v.get("date") for v in screener.values() if v.get("date")]
+        sig_day_s = max(dates) if dates else None
+    if not sig_day_s:
+        sig_day = max(paper_meta.values(), key=lambda x: x["start"],
+                      default=None)
+        sig_day_s = sig_day["start"] if sig_day else "—"
 
     top10 = tgt.head(10)[[c for c in ("code", "name", "weight")
                           if c in tgt.columns]]

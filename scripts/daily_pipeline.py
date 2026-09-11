@@ -250,10 +250,27 @@ def run_decision():
     return f"目标持仓 {len(tgt)} 只；{cand}"
 
 
+def _archive_report(path_str: str):
+    """报告生成后按日归档：reports/archive/<name>_YYYYMMDD.html（同日幂等覆盖）"""
+    import shutil
+    from datetime import date
+    from pathlib import Path
+    src = Path(path_str)
+    if not src.exists():
+        return path_str
+    adir = src.parent / "archive"
+    adir.mkdir(exist_ok=True)
+    dst = adir / f"{src.stem}_{date.today():%Y%m%d}{src.suffix}"
+    shutil.copy2(src, dst)
+    log.info(f"报告归档: {dst}")
+    return str(dst)
+
+
 @step("总览报告")
 def run_report():
     from scripts.overview_report import main as overview_main
     overview_main()
+    _archive_report("reports/overview_report.html")
     return "reports/overview_report.html"
 
 
@@ -261,6 +278,7 @@ def run_report():
 def run_dashboard():
     from scripts.data_dashboard import main as dash_main
     dash_main()
+    _archive_report("reports/data_dashboard.html")
     return "reports/data_dashboard.html"
 
 
@@ -268,6 +286,7 @@ def run_dashboard():
 def run_forward():
     from scripts.forward_monitor import build_report
     out = build_report()
+    _archive_report(str(out))
     return str(out)
 
 

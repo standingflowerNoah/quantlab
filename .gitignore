@@ -25,3 +25,7 @@ __pycache__/
 # ── 编辑器/系统 ──
 .DS_Store
 Thumbs.db
+
+# ── 临时/工具缓存 ──
+.playwright-cli/
+csi_search_tmp.json
