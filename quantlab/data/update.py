@@ -39,6 +39,35 @@ def update_all(date=None, domains: list[str] | None = None,
             results[domain] = f"FAIL: {str(e)[:80]}"
             log.error(f"[{domain}] {e}")
 
+    def run_checked(domain: str, fn, verify, fallback):
+        """主源执行后校验是否真正推进；未推进则自动降级到兜底源。
+
+        2026-09-11 起因：通达信服务器池全挂，kline_daily / index_kline 报
+        FAIL 后需人工跑 backfill 脚本。此包装把该动作内置到流水线。
+        """
+        if domains and domain not in domains:
+            return
+        t0 = time.time()
+        err = None
+        try:
+            n = fn()
+            results[domain] = f"ok ({n}) {time.time()-t0:.0f}s"
+        except Exception as e:                               # noqa: BLE001
+            err = str(e)[:80]
+            log.error(f"[{domain}] 主源失败: {e}")
+        if err is None and verify():
+            return
+        reason = err or "主源未推进水位"
+        log.warning(f"[{domain}] 未完成（{reason}）→ 自动降级兜底源")
+        try:
+            r = fallback()
+            results[domain] = f"degraded ({r}) {time.time()-t0:.0f}s"
+            store.add_quality(domain, "source_fallback", "warn",
+                              f"主源未完成：{reason}；已由兜底源补齐")
+        except Exception as e2:                              # noqa: BLE001
+            results[domain] = (f"FAIL: {reason} | 兜底亦失败: {str(e2)[:60]}")
+            log.error(f"[{domain}] 兜底也失败: {e2}")
+
     store = Store()
     # 交易日判断（重要）：trade_calendar 只含"已完成"的交易日（来自指数K线），
     # 盘前运行（如 07:00 定时任务）时"今天"必然不在日历中，仅用 is_trading_day
@@ -66,25 +95,98 @@ def update_all(date=None, domains: list[str] | None = None,
         else:
             return results
 
+    # 目标交易日 = 日历中最后一个已完成交易日（fallback 校验基准）
+    def _target_trade_date() -> pd.Timestamp:
+        if date is not None:
+            return pd.Timestamp(date)
+        d = store.q("SELECT max(trade_date) AS d FROM trade_calendar")["d"][0]
+        if d is None:
+            return pd.Timestamp.now().normalize()
+        return pd.Timestamp(d)
+
     # 1. 日历（顺延刷新未来）
     run("calendar", lambda: calendar.refresh_calendar())
+    if domains and "calendar" not in domains:
+        # 降级校验依赖"权威目标交易日"，部分域运行时日历也必须是新的，
+        # 否则 calendar_max == kline_max 会让校验恒真、兜底永不触发
+        try:
+            calendar.refresh_calendar()
+        except Exception as e:                               # noqa: BLE001
+            log.warning(f"日历刷新失败（不影响主流程）: {e}")
     # 2. 股票主表 + 当日估值快照
     from .instruments import refresh_instruments, update_daily_snapshot
+    from .sources import fsdb_fallback as fb
+
+    target = _target_trade_date()
+
+    def _advanced(table: str, key: str = "date"):
+        """水位是否已推进到目标交易日"""
+        def _v() -> bool:
+            try:
+                mx = store.q(f"SELECT max({key}) AS d FROM {table}")["d"][0]
+            except Exception:                                # noqa: BLE001
+                return False
+            return mx is not None and pd.Timestamp(mx) >= target
+        return _v
+
+    # 兜底结果按日缓存：kline_daily 与 daily_snapshot 共用同一次 fsdb 拉取
+    _fb_cache: dict = {}
+
+    def _fallback_daily() -> dict:
+        if "daily" not in _fb_cache:
+            _fb_cache["daily"] = fb.backfill_kline_and_snapshot(store, target)
+        r = _fb_cache["daily"]
+        return {"kline": r["kline"], "snapshot": r["snapshot"],
+                "miss": r["miss"]}
+
+    def _fallback_index() -> dict:
+        if "index" not in _fb_cache:
+            _fb_cache["index"] = fb.backfill_index_and_calendar(store, target)
+        return _fb_cache["index"]
+
     run("instruments", refresh_instruments)
-    run("daily_snapshot", lambda: update_daily_snapshot(date))
-    # 3. K线增量
+    run_checked("daily_snapshot",
+                lambda: update_daily_snapshot(date),
+                _advanced("daily_snapshot"),
+                _fallback_daily)
+    # 3. K线增量（主源通达信；失败/未推进 → 自动降级 fsdb 日线）
     from .kline import update_kline, update_index_kline, init_kline
     if full_kline:
         run("kline_daily", lambda: init_kline())
     else:
-        run("kline_daily", lambda: update_kline())
-    run("index_kline", update_index_kline)
+        run_checked("kline_daily",
+                    lambda: update_kline(),
+                    _advanced("kline_daily"),
+                    _fallback_daily)
+    run_checked("index_kline",
+                update_index_kline,
+                _advanced("index_kline"),
+                _fallback_index)
     # 3.5 分钟K线（free-stockdb 本地引擎：镜像增量同步 → 入湖）
     #     首次使用需先单独执行 cli.py data minute-init 全量回补
     from .minute import update_kline_1min
     from .sources.fsdb_source import sync as fsdb_sync
     run("fsdb_sync", fsdb_sync)
     run("kline_1min", update_kline_1min)
+    # 3.6 ETF / 基金日线（fsdb 源；2026-09-11 接入，先日线后分钟）
+    from .etf import update_etf_daily
+    run("etf_daily", lambda: update_etf_daily(date))
+    # 3.7 板块映射逐日快照（概念 + 申万一~三级）
+    #     ⚠️ fsdb 只给最新快照、无历史版本 → 从启用日起前向积累才有 PIT 语义
+    from .board import snapshot as board_snapshot
+    run("board_map", lambda: board_snapshot(date))
+    for _d, _desc in (("etf_daily", "ETF/基金日线（含 is_etf 标记）"),
+                      ("board_map", "板块映射逐日快照（概念+申万一~三级）")):
+        try:
+            store.register_dataset(_d, "clean", "free-stockdb", "daily", _desc)
+        except Exception as e:                               # noqa: BLE001
+            log.debug(f"注册数据集 {_d} 失败: {e}")
+    for _d in ("etf_daily", "board_map"):
+        if str(results.get(_d, "")).startswith(("ok", "degraded")):
+            try:
+                store.set_watermark(_d, target)
+            except Exception as e:                           # noqa: BLE001
+                log.debug(f"设置水位 {_d} 失败: {e}")
     # 4. 特色数据
     from .feature.dragon_tiger import update_dragon_tiger
     from .feature.eastmoney_features import (update_margin, update_lockup,
