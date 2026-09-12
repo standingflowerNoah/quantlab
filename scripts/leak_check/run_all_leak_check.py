@@ -88,9 +88,16 @@ class Env:
         self.con.execute(f"ATTACH '{dbp}' AS qdb (READ_ONLY)")
         self.con.execute("CREATE SCHEMA IF NOT EXISTS trunc")
         self.con.execute("CREATE SCHEMA IF NOT EXISTS mut")
-        self.real = {r[0].lower() for r in self.con.execute(
-            "SELECT table_name FROM duckdb_tables() "
-            "WHERE database_name = 'qdb'").fetchall()}
+        # 物化表 + 用户视图（minute_feat/kline_1min 等是主库内指向 parquet
+        # 的 VIEW，duckdb_tables() 不含视图 → 漏掉会导致重写映射缺失，因子
+        # SQL 原样执行未限定表名直接炸）
+        self.real = (
+            {r[0].lower() for r in self.con.execute(
+                "SELECT table_name FROM duckdb_tables() "
+                "WHERE database_name = 'qdb' AND NOT internal").fetchall()}
+            | {r[0].lower() for r in self.con.execute(
+                "SELECT view_name FROM duckdb_views() "
+                "WHERE database_name = 'qdb' AND NOT internal").fetchall()})
         self._views: set[str] = set()
         self._cols: dict[str, list[tuple[str, str]]] = {}
 
@@ -366,12 +373,23 @@ def aggregate(tests: list[dict], asof: list[str]) -> tuple[str, list[str]]:
 
 def pick_cuts(grid, prefix_props=(0.15, 0.35, 0.55, 0.75, 0.92),
               mut_props=(0.5, 0.9), seed=42) -> tuple[list, list]:
+    """检查点选取。mutation 切点强制补一个「4 月末财报季」切点：
+    首轮全量实证（2026-09-12）发现 Q1 披露季（4-17~5-01 年报/一季报
+    倒挂窗口）是披露类前视的高发期，随机切点曾漏检 sue（假阴性）——
+    earnings_accel 恰好随机命中才暴露。4 月切点取「年份×0.3」轮转，
+    避免每次都切同一天。"""
     n = len(grid)
     rng = random.Random(seed)
     rnd = int(n * (0.10 + 0.85 * rng.random()))
     cuts = sorted({pd.Timestamp(grid[min(int(n * p), n - 1)]) for p in prefix_props}
                   | {pd.Timestamp(grid[min(rnd, n - 1)])})
     muts = sorted({pd.Timestamp(grid[min(int(n * p), n - 1)]) for p in mut_props})
+    # 财报季固定切点：历史段内每个出现的年份取一个 4 月末附近交易日
+    apr = [d for d in grid if pd.Timestamp(d).month == 4
+           and pd.Timestamp(d).day >= 20]
+    if apr:
+        muts = sorted(set(muts) | {pd.Timestamp(apr[min(seed % len(apr),
+                                                       len(apr) - 1)])})
     return cuts, muts
 
 

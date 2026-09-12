@@ -103,6 +103,16 @@ def run_factor():
     return f"{ok}/{len(results)} 因子已更新"
 
 
+@step("评估指标入库")
+def run_metric_store():
+    # 因子评估指标日频存储 L0/L1/L2（方案 research/factor_metric_store_proposal_20260912.md）：
+    # 重算最近 130 交易日 L0 行（五个成熟信号日 T-1/T-5/T-20/T-60/T-120 补格
+    # + 当日覆盖/分布/换手/暴露）→ L1 滚动缓存全量重建 → L2 核心对追加；
+    # 周五附带全库 N×N 相关矩阵。失败不阻塞流水线（次日重算窗口天然补齐）。
+    from quantlab.factor.metric_store import update_daily
+    return update_daily()
+
+
 @step("拥挤度监控")
 def run_crowding():
     from quantlab.factor.crowding import monitor_pool

@@ -23,7 +23,8 @@ INDEX = ROOT / "reports" / "factor_eval" / "index.json"
 def main() -> None:
     p = argparse.ArgumentParser(description="检索历史评估报告")
     p.add_argument("--name", default=None, help="对象名称（模糊匹配）")
-    p.add_argument("--type", default=None, choices=["factor", "model"])
+    p.add_argument("--type", default=None,
+                   choices=["factor", "model", "dashboard"])
     p.add_argument("--tag", default=None, help="标签（精确）")
     p.add_argument("--since", default=None, help="日期下限 YYYY / YYYY-MM / YYYY-MM-DD")
     p.add_argument("--until", default=None, help="日期上限")
@@ -74,6 +75,8 @@ def main() -> None:
     if a.show:
         if len(hits) == 1:
             fp = INDEX.parent / hits[0]["file"]
+            if not fp.exists():          # dashboard 等根相对路径
+                fp = ROOT / hits[0]["file"]
             print("\n" + "=" * 70 + "\n")
             print(fp.read_text(encoding="utf-8"))
         else:
