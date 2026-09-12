@@ -1,6 +1,13 @@
-"""构建因子中心展示页：PandaAI 同款评估项 + QuantLab 独有增强区。
+"""构建日常因子看板页面：单因子全维度评估（v2，去对标化 + 结构重组）。
 输入 reports/factor_center_demo_data.json + v3 评估报告静态结论 →
-输出 docs/factor_center_amihud_20.html（单文件，无外部依赖）。"""
+输出 docs/factor_center_amihud_20.html（单文件，无外部依赖）。
+
+v2 变更（用户反馈）：
+  - 移除全部对标营销信息（PandaAI 同款 / QL+ 独有 / 对标总览表）
+  - 五分位与十分位合并进统一"分组分析"区
+  - "IC 衰减图"更名"多周期 IC 谱"（横轴=持有期长度，非时间）
+  - 修复双轴图右轴刻度错用主轴 Y() 导致不显示的 bug
+"""
 from __future__ import annotations
 import json
 from pathlib import Path
@@ -14,13 +21,12 @@ TEMPLATE = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>QuantLab 因子中心 · 因子分析增强面板（amihud_20）</title>
+<title>因子看板 · amihud_20</title>
 <style>
 :root{
   --bg:#1a1a1a; --panel:#232323; --panel2:#2a2a2a; --line:#3a3a3a;
   --txt:#e8e8e8; --sub:#9a9a9a; --gold:#e6b455; --red:#e05d5d;
   --green:#5dc98e; --blue:#5da9e0; --purple:#b48ee6; --cyan:#55c4c4;
-  --ql:#e6b455;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--txt);
@@ -32,17 +38,13 @@ h1{font-size:21px;font-weight:700}
 h1 .badge{font-size:11px;background:var(--gold);color:#1a1a1a;border-radius:4px;
   padding:2px 8px;vertical-align:3px;margin-left:10px;font-weight:700}
 .meta{color:var(--sub);font-size:12px;margin-top:6px}
-h2{font-size:16px;font-weight:700;margin:34px 0 6px;display:flex;align-items:center;gap:8px}
-h2 .tag{font-size:10.5px;font-weight:700;border-radius:3px;padding:1px 7px}
-.tag.panda{background:#3d4a5c;color:#a8c4e8}
-.tag.ql{background:var(--gold);color:#1a1a1a}
+h2{font-size:16px;font-weight:700;margin:34px 0 6px}
 .desc{color:var(--sub);font-size:12px;margin-bottom:14px}
 .grid{display:grid;gap:12px}
 .g2{grid-template-columns:1fr 1fr}.g3{grid-template-columns:1fr 1fr 1fr}
 .g4{grid-template-columns:repeat(4,1fr)}
 @media(max-width:900px){.g2,.g3,.g4{grid-template-columns:1fr}}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
-.card.ql{border-color:#6b5a33;background:#262215}
 .metric{background:var(--panel2);border-radius:8px;padding:10px 12px}
 .metric .k{color:var(--sub);font-size:11px;letter-spacing:.4px}
 .metric .v{font-size:20px;font-weight:700;margin-top:2px;font-variant-numeric:tabular-nums}
@@ -55,11 +57,11 @@ th:first-child,td:first-child{text-align:left}
 .chip{display:inline-block;font-size:11px;border-radius:10px;padding:1px 10px;
   border:1px solid var(--line);color:var(--sub);margin:2px}
 .ok{color:var(--green);font-weight:700}.warn{color:var(--gold);font-weight:700}
-.bad{color:var(--red);font-weight:700}
 .light{font-size:34px;line-height:1}
 svg text{font-family:"PingFang SC","Microsoft YaHei",sans-serif}
 .note{color:var(--sub);font-size:11.5px;margin-top:8px}
 .heatmap td,.heatmap th{padding:5px 6px;text-align:center;font-size:11.5px}
+h3{font-size:13.5px;font-weight:700;margin:18px 0 8px;color:#d8c89a}
 footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--line);
   color:var(--sub);font-size:11.5px}
 </style>
@@ -68,128 +70,106 @@ footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--line);
 <div class="wrap">
 
 <header>
-  <h1>QuantLab 因子中心 · 因子分析增强面板<span class="badge">QL+ 独有评估已叠加</span></h1>
-  <div class="meta">示例因子 <b>amihud_20</b>（Amihud 非流动性 · 20日均值）｜全A · 2023-01-01 ~ 2026-09-11 ｜数据更新至 2026-09-11｜对标 PandaAI 因子中心布局，所有数字为 QuantLab 真实计算</div>
+  <h1>因子看板 · amihud_20</h1>
+  <div class="meta">Amihud 非流动性 |日收益|/亿元成交额 的 20 日均值（低流动性溢价）｜全A · 2023-01-01 ~ 2026-09-11｜IC horizon = 20 日｜数据更新至 2026-09-11</div>
 </header>
 
-<h2><span class="tag panda">PandaAI 同款</span>对标总览：他们有什么，我们加了什么</h2>
-<table>
-<tr><th>PandaAI 因子中心评估项</th><th>展现形式</th><th>本页</th><th>QuantLab 增强（QL+）</th></tr>
-<tr><td>IC_MEAN / RANK_IC / IC_IR / IC_STD</td><td>因子卡片四指标</td><td>✓ 同款四指标</td><td class="pos">+ FDR q 多重检验校正、HLZ t&gt;3 门槛</td></tr>
-<tr><td>绩效概览（收益/夏普/回撤）</td><td>指标网格</td><td>✓ 最优分组全指标</td><td class="pos">+ 盈亏平衡成本 / 安全边际 / TC（模型层）</td></tr>
-<tr><td>IC 指标（P 值 / t 统计量 / 单调性）</td><td>指标网格</td><td>✓ 含 skew / kurt</td><td class="pos">+ 自相关折减 N_eff 后的诚实 t 值</td></tr>
-<tr><td>IC 衰减图</td><td>折线图</td><td>✓ h=1~120 全谱</td><td class="pos">+ 半衰期定量 + 换手下限解读</td></tr>
-<tr><td>IC 分布图（skew/kurt）</td><td>直方图</td><td>✓</td><td>—</td></tr>
-<tr><td>IC 自相关图</td><td>柱状图</td><td>✓ lag 1~10</td><td class="pos">+ 联动 N_eff（多重检验的地基）</td></tr>
-<tr><td>5 组收益 + 分组收益表</td><td>净值图 + 表格</td><td>✓ 五组 + 多空</td><td class="pos">+ 十分位分组 / 尾部集中度 / 多空腿可收割性</td></tr>
-<tr><td>最新数据（Top 因子值）</td><td>表格</td><td>✓</td><td class="pos">+ PIT 时点口径声明</td></tr>
-<tr><td>—（无对应）</td><td>—</td><td class="pos">QL+</td><td class="pos">红绿灯综合判定 / PIT 审计 / 正交化增量 / 经济机制登记 / 月度 IC 热力 / 报告归档检索</td></tr>
-</table>
-
-<h2><span class="tag panda">PandaAI 同款</span>因子卡片</h2>
+<!-- ============ 1. 概览指标 ============ -->
+<h2>概览指标</h2>
 <div class="card">
   <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
     <div><b style="font-size:16px">amihud_20</b>
       <span class="chip">流动性 / liquidity</span>
       <span class="chip">production</span>
-      <span class="chip">equity</span></div>
+      <span class="chip">机制登记：friction 结构摩擦 + 风险补偿</span></div>
     <div style="color:var(--sub);font-size:11.5px">起始 2022-01-04｜更新 2026-09-11｜因子池 311 个（已审计 311 · 0 FAIL）</div>
   </div>
-  <div style="color:var(--sub);font-size:12px;margin:4px 0 12px">Amihud 非流动性 |日收益|/亿元成交额 的 20 日均值（低流动性溢价）｜经济机制登记：friction 结构摩擦 + 风险补偿 ✓</div>
-  <div class="grid g4">
+  <div class="grid g4" style="margin-top:12px">
     <div class="metric"><div class="k">IC_MEAN（Pearson）</div><div class="v" id="m_ic"></div></div>
-    <div class="metric"><div class="k">RANK_IC</div><div class="v">+0.0790</div></div>
+    <div class="metric"><div class="k">Rank_IC（h=20）</div><div class="v">+0.0790</div></div>
     <div class="metric"><div class="k">IC_IR</div><div class="v">+0.456</div></div>
     <div class="metric"><div class="k">IC_STD</div><div class="v">0.1732</div></div>
   </div>
   <div class="grid g4" style="margin-top:8px">
-    <div class="metric"><div class="k">FDR q（BH+自相关折减）</div><div class="v" style="color:var(--green)">0.0007</div><div class="s">QL+ 311 因子多重检验</div></div>
-    <div class="metric"><div class="k">t_adj（库级 ρ=0.9）</div><div class="v">3.73</div><div class="s">HLZ 门槛 3.0 ✓｜本窗实测 ρ=0.954 → t=2.08</div></div>
-    <div class="metric"><div class="k">PIT 审计</div><div class="v" style="color:var(--green)">PASS</div><div class="s">QL+ 时点信息合规</div></div>
-    <div class="metric"><div class="k">IC 半衰期</div><div class="v">&gt;120 日</div><div class="s">QL+ 慢周期配置型信号</div></div>
+    <div class="metric"><div class="k">FDR q（BH + 自相关折减）</div><div class="v" style="color:var(--green)">0.0007</div><div class="s">311 因子多重检验校正</div></div>
+    <div class="metric"><div class="k">t_adj</div><div class="v">3.73</div><div class="s">库级 ρ=0.9｜本窗实测 ρ=0.954 → t=2.08</div></div>
+    <div class="metric"><div class="k">PIT 审计</div><div class="v" style="color:var(--green)">PASS</div><div class="s">时点信息合规</div></div>
+    <div class="metric"><div class="k">IC 半衰期</div><div class="v">&gt;120 日</div><div class="s">慢周期配置型信号</div></div>
   </div>
 </div>
 
-<h2><span class="tag panda">PandaAI 同款</span>因子分析面板</h2>
-<div class="desc">PandaAI 深面板结构：绩效概览 → IC 指标（含 P/t/单调性）→ 最新数据 → 分组收益 → IC 衰减/分布/自相关图。以下全部为 QuantLab 真实数据同款重算。</div>
-
-<div class="grid g4">
-  <div class="metric"><div class="k">因子收益（最优分组 Q5 年化）</div><div class="v pos">+34.2%</div><div class="s">20日远期逐日摊薄口径</div></div>
-  <div class="metric"><div class="k">夏普比率（Q5）</div><div class="v" id="m_q5sh"></div></div>
-  <div class="metric"><div class="k">最大回撤（Q5）</div><div class="v neg" id="m_q5dd"></div></div>
-  <div class="metric"><div class="k">多空年化（Q5−Q1）</div><div class="v pos">+27.3%</div><div class="s">⚠️ QL+ 提示：A股不可低成本做空</div></div>
-</div>
-<div class="grid g4" style="margin-top:8px">
-  <div class="metric"><div class="k">IC_mean</div><div class="v">+0.0790</div></div>
-  <div class="metric"><div class="k">Rank_IC</div><div class="v">+0.0790</div></div>
-  <div class="metric"><div class="k">IC_std</div><div class="v">0.1732</div></div>
-  <div class="metric"><div class="k">IC_IR</div><div class="v">+0.456</div></div>
-</div>
-<div class="grid g4" style="margin-top:8px">
-  <div class="metric"><div class="k">P(IC &gt; 0.02)</div><div class="v">67.2%</div></div>
-  <div class="metric"><div class="k">P(IC &lt; −0.02)</div><div class="v">24.7%</div></div>
-  <div class="metric"><div class="k">t-统计量</div><div class="v">2.08</div><div class="s">N_eff=21（lag1 ρ=0.954）｜库级口径 3.73</div></div>
-  <div class="metric"><div class="k">p-value（折减后）</div><div class="v">0.038</div><div class="s">单调性 1.00（五分位）</div></div>
-</div>
-
-<div class="grid g2" style="margin-top:14px">
-  <div class="card"><b>factor_value IC 衰减图（QL+ 全周期谱 h=1~120）</b>
-    <div id="chart_decay"></div>
-    <div class="note">PandaAI 展示单条衰减曲线；QuantLab 同时给 IC / ICIR 双轴谱 + 半衰期（&gt;120 日未衰减过半 = 慢周期配置型信号，20 日调仓不损耗预测力；h=1 IC +0.025 短端即有效）。</div>
-  </div>
-  <div class="card"><b>factor_value IC distribution　skew=−0.769　kurt=0.593</b>
-    <div id="chart_hist"></div>
-    <div class="note">PandaAI 同款分布图。左偏（负偏）= 存在 IC 深负的坏月份（2024-01 微盘崩塌 −0.431），均值被尾部拖累——QL+ 月度热力图进一步定位坏月份。</div>
-  </div>
-  <div class="card"><b>factor_value IC 自相关图（lag 1~10）</b>
-    <div id="chart_acf"></div>
-    <div class="note">lag1 ρ=0.954：20 日 IC 序列相邻共享 19/20 收益窗口。QL+ 以此做 N_eff 折减——不做折减时 276/311 因子“显著”，等于没筛。</div>
-  </div>
-  <div class="card"><b>factor_value 5 groups return（净值，2023-01 ~ 2026-09）</b>
-    <div id="chart_nav"></div>
-    <div class="note">Q1~Q5 = 因子值五分位组逐日摊薄净值；灰线 = 多空（Q5−Q1）。</div>
-  </div>
-</div>
-
-<div class="card" style="margin-top:12px"><b>分组收益（五分位 + 多空，20 日远期 · 逐日摊薄）</b>
-  <table id="tbl_groups" style="margin-top:8px"></table>
-  <div class="note">PandaAI 分组表含年化/超额/回撤/波动/换手/月胜率/夏普/IR；QuantLab 同位置展示同源指标，口径=20日远期收益逐日摊薄（非真实可交易组合，分组回测须过组合层 A/B 终审）。</div>
-</div>
-
-<div class="card" style="margin-top:12px"><b>最新数据（Top 10 因子值）</b>
-  <table id="tbl_latest" style="margin-top:8px"></table>
-  <div class="note">QL+ PIT 口径：因子值基于当日及以前公开数据计算，无 as-of 回填、无前视。</div>
-</div>
-
-<h2><span class="tag ql">QL+ QuantLab 独有</span>红绿灯综合判定与逐项依据</h2>
-<div class="card ql">
+<!-- ============ 2. 结论摘要 ============ -->
+<h2>结论摘要</h2>
+<div class="card">
   <div style="display:flex;gap:24px;align-items:center;flex-wrap:wrap">
     <div><div class="light">🟡</div><div style="color:var(--sub);font-size:11px">综合判定（初筛）</div></div>
     <div style="flex:1;min-width:280px">
       <b>黄色：两项冗余标记 + 正交化增量微弱</b><br>
-      <span style="color:var(--sub);font-size:12px">与 size 相关 −0.84、与 hf_amihud_20 相关 +0.87（|ρ|&gt;0.7）；对 size 正交化后残差 IC 仅 +0.0129（原始 +0.0790，保留 16%）。统计与合规本身全绿——降级来自信息冗余，这是 PandaAI 体系完全看不见的一层。</span>
+      <span style="color:var(--sub);font-size:12px">与 size 相关 −0.836、与 hf_amihud_20 相关 +0.874（|ρ|&gt;0.7）；对 size 正交化后残差 IC 仅 +0.0129（原始 +0.0790，保留 16%）。统计与合规本身全绿——降级来自信息冗余，不是统计不显著。</span>
     </div>
   </div>
   <table style="margin-top:12px">
-    <tr><th>检验项</th><th>结果</th><th>判定</th><th>PandaAI 是否覆盖</th></tr>
-    <tr><td>PIT / 结构审计（时点信息合规）</td><td>PASS（311 因子全库 0 FAIL）</td><td class="ok">✅</td><td style="color:var(--sub)">无</td></tr>
-    <tr><td>现场重算 IC20 / ICIR</td><td>+0.0790 / +0.456（875 交易日）</td><td class="ok">✅</td><td>部分（无现场审计对照）</td></tr>
-    <tr><td>FDR q（BH + ρ 自相关折减）</td><td>0.0007（t_adj 3.73 &gt; HLZ 3.0）</td><td class="ok">✅</td><td style="color:var(--sub)">无（仅朴素 t/p）</td></tr>
-    <tr><td>分组单调性（五分位 / 十分位）</td><td>1.00 / 1.00</td><td class="ok">✅</td><td>有（十分位无）</td></tr>
-    <tr><td>近 12M 滚动 ICIR</td><td>0.225（区间 [−0.04, 1.15]）</td><td class="ok">✅</td><td style="color:var(--sub)">无</td></tr>
-    <tr><td>经济机制登记</td><td>friction + 风险补偿（已登记）</td><td class="ok">✅</td><td style="color:var(--sub)">无</td></tr>
-    <tr><td>年度 IC 反号</td><td>0/4 年</td><td class="ok">✅</td><td style="color:var(--sub)">无</td></tr>
-    <tr><td>核心因子冗余</td><td>size −0.84 ｜ hf_amihud_20 +0.87</td><td class="warn">🟡</td><td style="color:var(--sub)">无</td></tr>
-    <tr><td>正交化增量（对 size+amihud_20）</td><td>残差 IC +0.0129 vs 原始 +0.0790</td><td class="warn">🟡</td><td style="color:var(--sub)">无</td></tr>
+    <tr><th>检验项</th><th>结果</th><th>判定</th></tr>
+    <tr><td>PIT / 结构审计（时点信息合规）</td><td>PASS（311 因子全库 0 FAIL）</td><td class="ok">✅</td></tr>
+    <tr><td>现场重算 IC20 / ICIR</td><td>+0.0790 / +0.456（875 交易日）</td><td class="ok">✅</td></tr>
+    <tr><td>FDR q（BH + ρ 自相关折减）</td><td>0.0007（t_adj 3.73，HLZ 门槛 3.0）</td><td class="ok">✅</td></tr>
+    <tr><td>分组单调性（五分位 / 十分位）</td><td>1.00 / 1.00</td><td class="ok">✅</td></tr>
+    <tr><td>近 12M 滚动 ICIR</td><td>0.225（区间 [−0.04, 1.15]）</td><td class="ok">✅</td></tr>
+    <tr><td>经济机制登记</td><td>friction + 风险补偿（已登记）</td><td class="ok">✅</td></tr>
+    <tr><td>年度 IC 反号</td><td>0/4 年</td><td class="ok">✅</td></tr>
+    <tr><td>核心因子冗余</td><td>size −0.836 ｜ hf_amihud_20 +0.874</td><td class="warn">🟡</td></tr>
+    <tr><td>正交化增量（对 size）</td><td>残差 IC +0.0129 vs 原始 +0.0790</td><td class="warn">🟡</td></tr>
   </table>
 </div>
 
-<div class="grid g2" style="margin-top:12px">
-  <div class="card ql"><b>QL+ 十分位分组 · 尾部集中度（全期，bp）</b>
-    <div id="chart_decile"></div>
-    <div class="note">D9→D10 的增量（207→336bp）才是组合真正买入的部分；五分位看不出尾部结构。多空（D10−D1）= +283bp/20日。</div>
+<!-- ============ 3. IC 分析 ============ -->
+<h2>IC 分析</h2>
+<div class="desc">多周期结构 · 分布形态 · 序列自相关 · 月度时变性</div>
+
+<div class="grid g2">
+  <div class="card"><b>多周期 IC / ICIR 谱（持有期 h = 1 ~ 120 日）</b>
+    <div id="chart_decay"></div>
+    <div class="note">横轴为<b>持有期长度</b>（信号预测的未来收益区间），非时间：|IC| 随 h 拉长单调增强，120 日内未跌破峰值一半（半衰期 &gt;120 日）——慢周期配置型信号，20 日调仓不损耗预测力；h=1 时 IC 已 +0.025，短端即有效。</div>
   </div>
-  <div class="card ql"><b>QL+ 多空腿可收割性（A股做空约束）</b>
+  <div class="card"><b>IC 分布（skew = −0.769，kurt = 0.593）</b>
+    <div id="chart_hist"></div>
+    <div class="note">左偏（负偏）= 存在 IC 深负的坏月份（2024-01 微盘崩塌 −0.431），均值被尾部拖累——坏月份的定位见右下月度热力图。</div>
+  </div>
+  <div class="card"><b>IC 自相关（lag 1 ~ 10）</b>
+    <div id="chart_acf"></div>
+    <div class="note">lag1 ρ=0.954：20 日 IC 序列相邻共享 19/20 收益窗口。多重检验的 N_eff 折减即以此为据——不做折减时 276/311 因子"显著"，等于没筛。</div>
+  </div>
+  <div class="card"><b>月度 IC 热力图</b>
+    <div style="overflow-x:auto"><table class="heatmap" id="tbl_monthly"></table></div>
+    <div class="note">2024-01 的 −0.431（微盘崩塌月）、2026-05 的 −0.144 一眼可见——IC 均值被这些月份拖累，也是左偏分布的来源。</div>
+  </div>
+</div>
+
+<div class="grid g4" style="margin-top:12px">
+  <div class="metric"><div class="k">P(IC &gt; 0.02)</div><div class="v">67.2%</div></div>
+  <div class="metric"><div class="k">P(IC &lt; −0.02)</div><div class="v">24.7%</div></div>
+  <div class="metric"><div class="k">t-统计量</div><div class="v">2.08</div><div class="s">N_eff=21（lag1 ρ=0.954）｜库级口径 3.73</div></div>
+  <div class="metric"><div class="k">p-value（折减后）</div><div class="v">0.038</div><div class="s">分组单调性 1.00</div></div>
+</div>
+
+<!-- ============ 4. 分组分析 ============ -->
+<h2>分组分析</h2>
+<div class="desc">五分位看整体单调结构，十分位看尾部集中度（组合实际买入的是最右一组）；口径 = 20 日远期收益逐日摊薄（非真实可交易组合，终审须组合层 A/B）</div>
+
+<div class="card"><b>分组收益（五分位 + 多空）</b>
+  <table id="tbl_groups" style="margin-top:8px"></table>
+</div>
+
+<div class="grid g2" style="margin-top:12px">
+  <div class="card"><b>分组净值曲线（2023-01 ~ 2026-09）</b>
+    <div id="chart_nav"></div>
+    <div class="note">Q1~Q5 = 因子值五分位组逐日摊薄净值；金线 = 多空（Q5−Q1）。</div>
+  </div>
+  <div class="card"><b>十分位分组 · 尾部集中度（全期均值，bp/20日）</b>
+    <div id="chart_decile"></div>
+    <div class="note">与左侧五分位同源、加细到十组：D9→D10 的增量（207→336bp）才是组合真正买入的部分，五分位看不出尾部结构。多空（D10−D1）= +283bp/20日。</div>
+  </div>
+  <div class="card"><b>多空腿可收割性（A 股做空约束）</b>
     <table style="margin-top:6px">
       <tr><th>年</th><th>多头腿 Q5</th><th>空头腿 Q1</th><th>多空</th><th>多头占比</th></tr>
       <tr><td>2023</td><td class="pos">+230bp</td><td class="neg">−180bp</td><td class="pos">+410</td><td>56%</td></tr>
@@ -197,37 +177,45 @@ footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--line);
       <tr><td>2025</td><td class="pos">+532bp</td><td class="pos">+285bp</td><td class="pos">+247</td><td>215%（空头腿也涨）</td></tr>
       <tr><td>2026</td><td class="neg">−71bp</td><td class="neg">−59bp</td><td class="neg">−12</td><td>—（同负）</td></tr>
     </table>
-    <div class="note">A 股无低成本做空：预测力集中在空头腿 = 不可收割。2024/2025 多头占比 &gt;100% = 空头腿自身为正收益，多空价差全部由多头腿贡献——此维度直接回答“IC 好的钱到底能不能赚”。</div>
+    <div class="note">A 股无低成本做空：预测力集中在空头腿 = 不可收割。2024/2025 多头占比 &gt;100% = 空头腿自身为正，多空价差全部由多头腿贡献——直接回答"IC 好的钱到底能不能赚"。</div>
   </div>
-  <div class="card ql"><b>QL+ 正交化增量（对生产因子 size 的边际贡献）</b>
+  <div class="card"><b>年度分解（含五分位组收益，bp/20日）</b>
+    <table style="margin-top:8px">
+      <tr><th>年</th><th>天数</th><th>IC</th><th>ICIR</th><th>胜率</th><th>Q1</th><th>Q2</th><th>Q3</th><th>Q4</th><th>Q5</th><th>多空</th></tr>
+      <tr><td>2023</td><td>242</td><td class="pos">+0.1470</td><td>+1.090</td><td>87%</td><td class="neg">−180</td><td class="neg">−86</td><td class="neg">−23</td><td class="pos">+57</td><td class="pos">+230</td><td class="pos">+410</td></tr>
+      <tr><td>2024</td><td>242</td><td class="pos">+0.0215</td><td>+0.098</td><td>62%</td><td class="pos">+128</td><td class="pos">+107</td><td class="pos">+110</td><td class="pos">+124</td><td class="pos">+262</td><td class="pos">+134</td></tr>
+      <tr><td>2025</td><td>243</td><td class="pos">+0.0902</td><td>+0.647</td><td>74%</td><td class="pos">+285</td><td class="pos">+304</td><td class="pos">+341</td><td class="pos">+406</td><td class="pos">+532</td><td class="pos">+247</td></tr>
+      <tr><td>2026</td><td>148</td><td class="pos">+0.0434</td><td>+0.282</td><td>59%</td><td class="neg">−59</td><td class="neg">−120</td><td class="neg">−90</td><td class="neg">−23</td><td class="neg">−71</td><td class="neg">−12</td></tr>
+    </table>
+    <div class="note">2026 年多空腿整体转负（−12bp/20日）——信号衰减的年度级证据，与"近 12M 滚动 ICIR 0.225（区间下限 −0.04）"互相印证。</div>
+  </div>
+</div>
+
+<!-- ============ 5. 信息增量 ============ -->
+<h2>信息增量</h2>
+<div class="desc">该因子在现有生产因子集之外还能贡献多少独立信息</div>
+
+<div class="grid g2">
+  <div class="card"><b>正交化增量（对生产因子 size 的边际贡献）</b>
     <div id="chart_resid"></div>
-    <div class="note">对 size 逐日截面 OLS 取残差后的 rank IC：原始 +0.0790 → 残差 +0.0129，<b>仅保留 16% 增量</b>（ICIR 0.456→0.099）。反向：size 对 amihud 正交化保留 73%。结论：PROD 双因子里 size 是主信息载体，amihud_20 边际贡献小，且与 hf_amihud_20（ρ=0.87）近似同一信号。</div>
+    <div class="note">对 size 逐日截面 OLS 取残差后的 rank IC：原始 +0.0790 → 残差 +0.0129，<b>仅保留 16% 增量</b>（ICIR 0.456→0.099）。反向：size 对 amihud 正交化保留 73%。结论：PROD 双因子里 size 是主信息载体，amihud_20 边际贡献小，且与 hf_amihud_20（ρ=+0.874）近似同一信号。</div>
   </div>
-  <div class="card ql"><b>QL+ 月度 IC 热力图（时变性显式化）</b>
-    <div style="overflow-x:auto"><table class="heatmap" id="tbl_monthly" style="margin-top:6px"></table></div>
-    <div class="note">2024-01 的 −0.431（微盘崩塌月）、2026-05 的 −0.144 一眼可见——IC 均值被这些月份拖累，也是左偏分布的来源。</div>
+  <div class="card"><b>与核心因子截面相关（最近 250 日 spearman 均值）</b>
+    <table style="margin-top:6px">
+      <tr><th>核心因子</th><th>ρ</th><th>天数</th><th>判定</th></tr>
+      <tr><td>size</td><td class="neg">−0.836</td><td>250</td><td class="warn">⚠️ 冗余（|ρ|&gt;0.7）</td></tr>
+      <tr><td>sue_i</td><td>−0.080</td><td>250</td><td class="ok">独立</td></tr>
+      <tr><td>hf_amihud_20</td><td class="pos">+0.874</td><td>250</td><td class="warn">⚠️ 冗余（|ρ|&gt;0.7）</td></tr>
+    </table>
+    <div class="note">与 sue_i 基本正交；对 size 与 hf_amihud_20 双冗余——与左图正交化结论一致，是本因子降级 🟡 的直接原因。</div>
   </div>
 </div>
 
-<div class="card ql" style="margin-top:12px"><b>QL+ 年度分解（含五分位组收益，bp/20日）</b>
-  <table style="margin-top:8px">
-    <tr><th>年</th><th>天数</th><th>IC</th><th>ICIR</th><th>胜率</th><th>Q1</th><th>Q2</th><th>Q3</th><th>Q4</th><th>Q5</th><th>多空</th></tr>
-    <tr><td>2023</td><td>242</td><td class="pos">+0.1470</td><td>+1.090</td><td>87%</td><td class="neg">−180</td><td class="neg">−86</td><td class="neg">−23</td><td class="pos">+57</td><td class="pos">+230</td><td class="pos">+410</td></tr>
-    <tr><td>2024</td><td>242</td><td class="pos">+0.0215</td><td>+0.098</td><td>62%</td><td class="pos">+128</td><td class="pos">+107</td><td class="pos">+110</td><td class="pos">+124</td><td class="pos">+262</td><td class="pos">+134</td></tr>
-    <tr><td>2025</td><td>243</td><td class="pos">+0.0902</td><td>+0.647</td><td>74%</td><td class="pos">+285</td><td class="pos">+304</td><td class="pos">+341</td><td class="pos">+406</td><td class="pos">+532</td><td class="pos">+247</td></tr>
-    <tr><td>2026</td><td>148</td><td class="pos">+0.0434</td><td>+0.282</td><td>59%</td><td class="neg">−59</td><td class="neg">−120</td><td class="neg">−90</td><td class="neg">−23</td><td class="neg">−71</td><td class="neg">−12</td></tr>
-  </table>
-  <div class="note">2026 年多空腿整体转负（−12bp/20日）——因子层级信号衰减的年度级证据，与“近 12M 滚动 ICIR 0.225（区间下限 −0.04）”互相印证。</div>
-</div>
-
-<div class="card ql" style="margin-top:12px"><b>QL+ 工程化能力（评估体系之外）</b>
-  <table style="margin-top:8px">
-    <tr><th>能力</th><th>说明</th></tr>
-    <tr><td>报告归档仓库</td><td>reports/factor_eval/，命名 {type}_{name}_{yyyymmdd}_{HHMM}.md，同日重跑不覆盖，index.json 追加式索引</td></tr>
-    <tr><td>检索 CLI</td><td>search_eval.py：按名称模糊 / 标签 / 日期区间 / 类型 / ID 检索，--latest --show 直出全文</td></tr>
-    <tr><td>批量评估</td><td>因子路径 ~40s/个（含多周期谱+十分位+正交化），模型路径含回测+TC+盈亏平衡</td></tr>
-    <tr><td>审计可追溯</td><td>每个数字可回溯到审计 JSON / 因子湖 parquet / DuckDB 只读查询，全链路无写锁</td></tr>
-  </table>
+<!-- ============ 6. 最新数据 ============ -->
+<h2>最新数据</h2>
+<div class="card">
+  <table id="tbl_latest"></table>
+  <div class="note">PIT 口径：因子值基于当日及以前公开数据计算，无 as-of 回填、无前视。</div>
 </div>
 
 <footer>
@@ -239,9 +227,6 @@ footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--line);
 <script>
 const DATA = __DATA__;
 document.getElementById('m_ic').textContent = (DATA.ic_pearson_mean>=0?'+':'')+DATA.ic_pearson_mean;
-const q5=DATA.groups.Q5, ls=DATA.groups.LS;
-document.getElementById('m_q5sh').textContent=q5.sharpe;
-document.getElementById('m_q5dd').textContent=(q5.mdd*100).toFixed(1)+'%';
 
 const C={q:'#9a9a9a',q1:'#5da9e0',q2:'#7bb8e8',q3:'#9a9a9a',q4:'#e0a35d',q5:'#e05d5d',ls:'#e6b455',ic:'#e05d5d',icir:'#55c4c4'};
 function svgEl(w,h){const s=document.createElementNS('http://www.w3.org/2000/svg','svg');
@@ -249,21 +234,26 @@ function svgEl(w,h){const s=document.createElementNS('http://www.w3.org/2000/svg
 function add(s,tag,attrs,txt){const e=document.createElementNS('http://www.w3.org/2000/svg',tag);
   for(const k in attrs)e.setAttribute(k,attrs[k]);if(txt!=null)e.textContent=txt;s.appendChild(e);return e}
 
-/* ---- 折线图（decay / nav）---- */
+/* ---- 折线图（支持双轴：右轴刻度 + 右轴线，刻度位置用右轴比例）---- */
 function lineChart(el,xs,series,xlabels,fmt){
-  const W=520,H=230,L=46,R=46,T=14,B=30,w=W-L-R,h=H-T-B;
+  const W=520,H=230,L=46,R=52,T=16,B=30,w=W-L-R,h=H-T-B;
   const s=svgEl(W,H);el.appendChild(s);
   const main=series.filter(p=>!p.axis2), sec=series.filter(p=>p.axis2);
   const ymin=Math.min(...main.flatMap(p=>p.data)),ymax=Math.max(...main.flatMap(p=>p.data));
   let ymin2=0,ymax2=1;
-  if(sec.length){ymin2=Math.min(...sec.flatMap(p=>p.data));ymax2=Math.max(...sec.flatMap(p=>p.data));}
+  if(sec.length){ymin2=Math.min(...sec.flatMap(p=>p.data));ymax2=Math.max(...sec.flatMap(p=>p.data));
+    const pad2=(ymax2-ymin2)*0.08||0.05;ymin2-=pad2;ymax2+=pad2;}
   const X=i=>L+(xs.length>1?i/(xs.length-1)*w:0);
   const Y=v=>T+h-(v-ymin)/(ymax-ymin)*h, Y2=v=>T+h-(v-ymin2)/(ymax2-ymin2)*h;
-  for(let g=0;g<=4;g++){const v=ymin+(ymax-ymin)*g/4;
+  for(let g=0;g<=4;g++){
+    const v=ymin+(ymax-ymin)*g/4;
     add(s,'line',{x1:L,y1:Y(v),x2:W-R,y2:Y(v),stroke:'#333','stroke-width':1});
     add(s,'text',{x:L-5,y:Y(v)+3,'text-anchor':'end',fill:'#9a9a9a','font-size':9},fmt?fmt(v):v.toFixed(2));
-    if(sec.length){const v2=ymin2+(ymax2-ymin2)*g/4;
-      add(s,'text',{x:W-R+5,y:Y(v2)+3,fill:'#55c4c4','font-size':9},v2.toFixed(2));}}
+    if(sec.length){
+      const v2=ymin2+(ymax2-ymin2)*g/4;
+      /* 右轴刻度：位置用 Y2（右轴比例）——修复旧版误用 Y() 导致右轴不显示 */
+      add(s,'text',{x:W-R+6,y:Y2(v2)+3,fill:'#55c4c4','font-size':9},v2.toFixed(2));}}
+  if(sec.length){add(s,'line',{x1:W-R,y1:T,x2:W-R,y2:T+h,stroke:'#55c4c4','stroke-width':1,opacity:0.5});}
   const nx=Math.min(xs.length,8);
   for(let i=0;i<nx;i++){const xi=Math.round(i*(xs.length-1)/(nx-1));
     add(s,'text',{x:X(xi),y:H-10,'text-anchor':'middle',fill:'#9a9a9a','font-size':9},xlabels?xlabels[xi]:xs[xi]);}
@@ -275,7 +265,7 @@ function lineChart(el,xs,series,xlabels,fmt){
     const t=add(s,'text',{x:lx+7,y:T+5,fill:'#bbb','font-size':10},p.name);lx+=7+t.getComputedTextLength()+16;});
 }
 
-/* ---- IC 衰减 ---- */
+/* ---- 多周期 IC 谱 ---- */
 const hs=[1,3,5,10,20,40,60,120];
 lineChart(document.getElementById('chart_decay'),hs,
   [{name:'IC',color:C.ic,data:__DECAY_IC__},
@@ -363,7 +353,7 @@ lineChart(document.getElementById('chart_decay'),hs,
   t.innerHTML=html;})();
 
 (function(){const t=document.getElementById('tbl_monthly');
-  const m=DATA.monthly_ic,mm=['','1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
+  const m=DATA.monthly_ic;
   let html='<tr><th>年</th>';m.months.forEach(x=>html+='<th>'+x+'月</th>');html+='</tr>';
   m.years.forEach((y,i)=>{html+='<tr><td>'+y+'</td>';
     m.values[i].forEach(v=>{let bg='',c='#777';
@@ -390,4 +380,4 @@ out = ROOT / "docs" / "factor_center_amihud_20.html"
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(html, encoding="utf-8")
 print(f"[built] {out}  ({out.stat().st_size:,} bytes)")
-print("pearson IC_MEAN =", D["ic_pearson_mean"], "| Q5 sharpe =", D["groups"]["Q5"]["sharpe"])
+print("pearson IC_MEAN =", D["ic_pearson_mean"])
