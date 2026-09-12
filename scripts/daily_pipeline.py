@@ -19,10 +19,16 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from quantlab.config import get_logger
+from quantlab.broadcast import broadcast
 
 log = get_logger("pipeline")
 
 STEPS = []
+
+# 广播类别映射（变更广播机制：每步完成/失败/阻塞都广播，失败归 incident）
+BC_CATEGORY = {"数据更新": "data", "数据质量": "data", "分钟特征": "data",
+               "因子计算": "model", "拥挤度监控": "model", "决策信号": "model",
+               "总览报告": "script", "数据看板": "script", "前向监控": "script"}
 
 
 def step(name):
@@ -309,6 +315,10 @@ def main():
         "总览报告": args.skip_report,
     }
 
+    skipped_names = [n for n, v in skip.items() if v]
+    broadcast("script", "每日流水线启动", action="info",
+              detail=f"共 {len(STEPS)} 步，跳过: {', '.join(skipped_names) or '无'}",
+              source="daily_pipeline")
     log.info("=" * 56)
     log.info("每日流水线启动")
     t_all = time.time()
@@ -321,6 +331,10 @@ def main():
         if name in blocked:
             summary.append((name, "blocked", "数据质量未通过，已跳过"))
             log.warning(f"[{name}] blocked（数据质量未通过）")
+            broadcast("incident", f"流水线[{name}] 被阻塞", action="warn",
+                      detail="数据质量未通过，本步骤跳过",
+                      impact="该步骤今日无产出，下游消费方注意数据截至时间",
+                      source="daily_pipeline")
             continue
         t0 = time.time()
         try:
@@ -328,10 +342,17 @@ def main():
             dt = time.time() - t0
             summary.append((name, "ok", msg))
             log.info(f"[{name}] ok ({dt:.0f}s): {msg}")
+            broadcast(BC_CATEGORY.get(name, "script"),
+                      f"流水线[{name}] 完成", action="change",
+                      detail=str(msg)[:400], source="daily_pipeline")
         except Exception as e:
             dt = time.time() - t0
             summary.append((name, "FAIL", str(e)[:80]))
             log.error(f"[{name}] FAIL ({dt:.0f}s): {e}")
+            broadcast("incident", f"流水线[{name}] 失败", action="fail",
+                      detail=str(e)[:400],
+                      impact="下游步骤可能受阻或使用陈旧数据；下轮任务前请先读广播并排查",
+                      source="daily_pipeline")
             if name == "数据质量":
                 blocked.update(["因子计算", "拥挤度监控", "决策信号"])
 
@@ -339,6 +360,14 @@ def main():
     for name, status, msg in summary:
         log.info(f"  {name:10s} {status:8s} {msg}")
     log.info(f"流水线完成，总耗时 {(time.time()-t_all)/60:.1f} 分钟")
+    fails = [n for n, s, _ in summary if s == "FAIL"]
+    broadcast("script",
+              f"每日流水线结束（{(time.time()-t_all)/60:.1f} 分钟）",
+              action="fail" if fails else "change",
+              detail=" | ".join(f"{n}:{s}" for n, s, _ in summary)[:800],
+              impact=(f"失败步骤: {', '.join(fails)}（请读广播排查后重跑）"
+                      if fails else "全部完成，报告见 reports/"),
+              source="daily_pipeline")
 
 
 if __name__ == "__main__":

@@ -41,6 +41,10 @@ for Y in $YEARS; do
             echo "--- 结束 $Y rc=0 $(date '+%F %T') ---" | tee -a "$LOG"
             break
         fi
+        if [ "$RC" -eq 2 ]; then
+            echo "🛑 $Y 因【token 过期/无效】中止（rc=2），不再重试。请更换 token 后续跑。" | tee -a "$LOG"
+            break
+        fi
         echo "--- $Y 第 $ATTEMPT 次异常退出 rc=$RC，5s 后续跑 $(date '+%F %T') ---" | tee -a "$LOG"
         sleep 5
     done

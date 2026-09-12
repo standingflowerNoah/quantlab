@@ -81,6 +81,14 @@ MAX_WORKERS = 5
 # 超时太大会让 worker 长挂（曾出现 1 小时只推进 50 只的停滞）。
 REQ_TIMEOUT = 25.0
 
+# 连续失败阈值：超过即判定为"源端不可用"（token 过期/服务停摆）并中止本次运行。
+# 2026-09-12 15:53 token 过期后，脚本又空转了 2.5 小时、浪费 341 次请求才发现。
+CONSECUTIVE_FAIL_ABORT = 30
+
+
+class FatalAuthError(RuntimeError):
+    """token 过期/无效 —— 重试无意义，必须立刻停止。"""
+
 FLUSH_ROWS = 2_000_000  # 缓冲到该行数即落盘
 CHUNK = "month"         # 切段粒度：month（唯一安全值）
 
@@ -182,6 +190,9 @@ def api(api_name: str, params: dict, retry: int = 8, timeout: float | None = Non
                 msg = str(d.get("msg"))
                 if "区间超限" in msg or "必填参数" in msg or "接口名" in msg:
                     raise ValueError(f"{api_name} {msg}")
+                if "过期" in msg or "无效" in msg or d.get("code") == 2002:
+                    # 认证类错误重试无意义，直接抛致命异常
+                    raise FatalAuthError(f"{api_name} code={d.get('code')} {msg}")
                 if "过快" in msg or "不要超过" in msg:
                     # 指数退避 + 全局冷却，避免所有 worker 同时撞限制
                     back = min(3.0 * (2 ** a), 60.0)
@@ -455,12 +466,14 @@ def run_backfill(args: argparse.Namespace) -> None:
 
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
         futs = {ex.submit(work, c): c for c in todo}
+        consec_fail = 0
         for fut in as_completed(list(futs)):
             code = futs.pop(fut, None)   # 立即释放 future 及其结果
             try:
                 n = fut.result()
                 done.add(code)
                 n_ok += 1
+                consec_fail = 0
                 if n_ok % 50 == 0:
                     with lock:          # writer 由 work() 在锁内写入，flush 也必须同锁
                         writer.flush()
@@ -473,10 +486,32 @@ def run_backfill(args: argparse.Namespace) -> None:
                              n_ok, len(todo), n_ok / len(todo) * 100,
                              n_ok / el * 60, LIMITER.n_throttle,
                              (len(todo) - n_ok) / max(n_ok / el, 1e-9) / 3600)
+            except FatalAuthError as e:
+                log.error("🛑 致命认证错误，立即中止（不再空转）: %s", e)
+                for f in futs:
+                    f.cancel()
+                writer.flush()
+                if not args.dry_run:
+                    cur["done"] = sorted(done)
+                    cur["failed"] = fail_detail
+                    save_progress(prog_all)
+                raise SystemExit(2) from None
             except Exception as e:  # noqa: BLE001
                 n_fail += 1
+                consec_fail += 1
                 fail_detail[code] = str(e)[:200]
                 log.error("失败 %s: %s", code, str(e)[:200])
+                if consec_fail >= CONSECUTIVE_FAIL_ABORT:
+                    log.error("🛑 连续 %d 个标失败（疑似 token 过期 / 源端停摆），中止本次运行",
+                              consec_fail)
+                    for f in futs:
+                        f.cancel()
+                    writer.flush()
+                    if not args.dry_run:
+                        cur["done"] = sorted(done)
+                        cur["failed"] = fail_detail
+                        save_progress(prog_all)
+                    raise SystemExit(3) from None
 
     writer.flush()
     if not args.dry_run:
