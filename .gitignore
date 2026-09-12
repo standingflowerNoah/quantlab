@@ -29,3 +29,6 @@ Thumbs.db
 # ── 临时/工具缓存 ──
 .playwright-cli/
 csi_search_tmp.json
+
+# 密钥（API token 等）绝不入库
+.secrets/

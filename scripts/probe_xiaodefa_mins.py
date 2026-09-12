@@ -11,7 +11,17 @@ import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-TOKEN = "65cc2e7b8c4266142c1bc426db6d4c16f183531d34f7e701833f1790"
+import pathlib as _pl
+def _load_token():
+    t = os.environ.get("XIAODEFA_TOKEN", "").strip()
+    if t: return t
+    for p in (_pl.Path(__file__).resolve().parent.parent / ".secrets" / "xiaodefa_token",
+              _pl.Path.home() / ".workbuddy" / "xiaodefa_token"):
+        if p.exists():
+            t = p.read_text(encoding="utf-8").strip()
+            if t: return t
+    return ""
+TOKEN = _load_token()
 URL = "https://t.xiaodefa.top/"
 
 

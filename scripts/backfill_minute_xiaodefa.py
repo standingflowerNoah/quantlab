@@ -59,10 +59,27 @@ DAILY = ROOT / "data" / "lake" / "clean" / "mirror" / "kline_daily.parquet"
 PROGRESS = LAKE_1MIN / "_xd_progress.json"
 CALL_LOG = ROOT / "logs" / "backfill_minute_xiaodefa.log"
 
-TOKEN = os.environ.get(
-    "XIAODEFA_TOKEN",
-    "65cc2e7b8c4266142c1bc426db6d4c16f183531d34f7e701833f1790",
-)
+def _load_token() -> str:
+    """token 绝不硬编码进仓库（本仓库有 GitHub 远端，旧 token 曾误入历史）。
+
+    优先级：环境变量 XIAODEFA_TOKEN → <项目>/.secrets/xiaodefa_token → ~/.workbuddy/xiaodefa_token
+    """
+    t = os.environ.get("XIAODEFA_TOKEN", "").strip()
+    if t:
+        return t
+    for p in (ROOT / ".secrets" / "xiaodefa_token",
+              Path.home() / ".workbuddy" / "xiaodefa_token"):
+        try:
+            if p.exists():
+                t = p.read_text(encoding="utf-8").strip()
+                if t:
+                    return t
+        except OSError:
+            continue
+    return ""
+
+
+TOKEN = _load_token()
 URL = "https://t.xiaodefa.top/"
 
 # ⚠️ 本机全局挂了 HTTP 代理隧道（env https_proxy=http://127.0.0.1:57092），
