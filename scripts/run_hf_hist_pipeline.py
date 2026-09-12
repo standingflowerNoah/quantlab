@@ -76,11 +76,12 @@ def phase_minute_feat() -> dict:
     out = {}
     tmp = config.CLEAN_DIR / ".duckdb_tmp"
     tmp.mkdir(parents=True, exist_ok=True)
+    # 4GB：机器 33GB，另一会话同时在跑重活（占 8GB+），留足余量防 OOM
     con = duckdb.connect()
     try:
         for y in YEARS:
             LOG.info("[阶段1] minute_feat %s（按月分块）", y)
-            out[y] = build_year_chunked(con, y, "6GB", tmp)
+            out[y] = build_year_chunked(con, y, "4GB", tmp)
     finally:
         con.close()
     return out

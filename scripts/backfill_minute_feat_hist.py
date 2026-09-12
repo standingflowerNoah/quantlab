@@ -51,8 +51,17 @@ def month_chunks(year: int) -> list[tuple[str, str]]:
 
 
 def build_year_chunked(con: duckdb.DuckDBPyConnection, year: int,
-                       mem: str, tmp_dir: Path) -> int:
-    """单年按月分块聚合 -> 写 part-<year>.parquet。返回行数。"""
+                       mem: str, tmp_dir: Path, skip_done: bool = True) -> int:
+    """单年按月分块聚合 -> 写 part-<year>.parquet。返回行数。
+
+    skip_done=True 且 part 文件已存在时跳过（重跑管线时避免整年重算，
+    2026-09-13 起进程多次被静默回收，必须可断点续跑）。"""
+    dst = MF.FEAT_DIR / f"part-{year}.parquet"
+    if skip_done and dst.exists() and dst.stat().st_size > 0:
+        n = pd.read_parquet(dst, columns=["code"]).shape[0]
+        log.info(f"{year}: part 文件已存在（{n:,} 行），跳过")
+        return n
+
     con.execute(f"SET memory_limit='{mem}'")
     con.execute(f"SET temp_directory='{tmp_dir.as_posix()}'")
     con.execute("SET preserve_insertion_order=false")   # 省内存（聚合不依赖行序）
