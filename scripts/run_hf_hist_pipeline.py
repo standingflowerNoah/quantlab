@@ -76,12 +76,13 @@ def phase_minute_feat() -> dict:
     out = {}
     tmp = config.CLEAN_DIR / ".duckdb_tmp"
     tmp.mkdir(parents=True, exist_ok=True)
-    # 4GB：机器 33GB，另一会话同时在跑重活（占 8GB+），留足余量防 OOM
+    # 2GB：已实测该限制下单月分块可正常完成（reports/_tmp/verify_mf_chunk.txt）。
+    # 更大内存疑似触发进程回收（多次 ~30-40min 静默死亡），宁可慢不可挂。
     con = duckdb.connect()
     try:
         for y in YEARS:
             LOG.info("[阶段1] minute_feat %s（按月分块）", y)
-            out[y] = build_year_chunked(con, y, "4GB", tmp)
+            out[y] = build_year_chunked(con, y, "2GB", tmp)
     finally:
         con.close()
     return out
