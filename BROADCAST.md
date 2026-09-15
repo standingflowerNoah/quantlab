@@ -9,10 +9,11 @@
 >   `add --category data --title "..." --detail "..." --impact "..."`
 > - 代码：`from quantlab.broadcast import broadcast`
 
-累计 **278** 条 · 游标 #270 · 未读 **8** 条 · 本板显示最新 278 条
+累计 **279** 条 · 游标 #278 · 未读 **1** 条 · 本板显示最新 279 条
 
 | seq | 时间 | 类别 | 动作 | 标题 | 详情 | 影响 | 来源 |
 |---|---|---|---|---|---|---|---|
+| #279 | 2026-09-16 01:07 | script | change | 最新进展推送 GitHub + README/DEV_LOG 全面更新 | 25 提交推送成功(4699294..7f717ea)：数据冗余体系/指标湖看板/高频因子线/研究终审/运营自动化全量入库(117 文件 +20382 行)。README 更新：流水线十步、40 数据… | GitHub 与本地同步；无主库/流水线影响 | git-push 会话 |
 | #278 | 2026-09-16 00:41 | script | change | 架构纠正：十分位/残差 IC 改走预计算落库路线（L0 扩展湖 factor_metric_ext），页面生成退化为轻聚… | 用户点醒：页面生成不应做重截面计算。纠正 v1.1 方案——新增 scripts/factor_eval/backfill_metric_ext.py：十分位（dec1~dec10_ret20 逐日组… |  | broadcast.py:113 |
 | #277 | 2026-09-16 00:28 | data | change | 流水线[分钟特征] 完成 | minute_feat 已覆盖至 2026-09-14，无需增量 |  | daily_pipeline |
 | #276 | 2026-09-16 00:28 | data | change | 流水线[数据质量] 完成 | 0 失败, 1 警告（数据健康） |  | daily_pipeline |
