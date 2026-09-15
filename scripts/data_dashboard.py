@@ -38,7 +38,7 @@ DOMAINS = {
     "margin_total":     ("两融余额", "date", "日", "东财", None),
     "lockup":           ("限售解禁", "date", "日", "东财", None),
     "block_trade":      ("大宗交易", "date", "日", "东财", None),
-    "holder_num":       ("股东户数", "holder_date", "月触发", "东财", None),
+    "holder_num":       ("股东户数", "notice_date", "月触发", "东财", None),
     "hot_topic":        ("热点题材", "date", "日", "同花顺", None),
     "northbound_daily": ("北向资金", "date", "日", "东财", "2024-08-15"),
     "index_members":    ("指数成分", "in_date", "周触发", "东财", None),

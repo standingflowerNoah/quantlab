@@ -271,6 +271,8 @@ def main() -> None:
     p.add_argument("--tags", default="", help="逗号分隔标签")
     p.add_argument("--h-ic", type=int, default=5, help="IC 主口径 horizon（默认 5）")
     p.add_argument("--h-grp", type=int, default=20, help="分组收益 horizon（默认 20）")
+    p.add_argument("--no-index", action="store_true",
+                   help="跳过 index.json 登记（批量重建时由驱动统一登记）")
     a = p.parse_args()
     name, start, end, H_IC, H_GRP = a.name, a.start, a.end, a.h_ic, a.h_grp
     tags = [t.strip() for t in a.tags.split(",") if t.strip()]
@@ -703,7 +705,16 @@ def main() -> None:
     out = DOCS / f"factor_center_{name}.html"
     out.write_text(html, encoding="utf-8")
 
-    # ── 10. 索引登记 ──
+    # ── 10. 索引登记（--no-index 时跳过，由批量驱动统一登记）──
+    if a.no_index:
+        print(f"[done] {light} {name}: IC{H_IC} {I['mean']:+.4f} "
+              f"t_adj {I['t_adj']:.2f} q={q}")
+        for f in flags:
+            print(f"  ⚠️ {f}")
+        print(f"[dashboard] {out}  ({out.stat().st_size:,} bytes)")
+        print("[index] skipped (--no-index)")
+        return
+
     idx = (json.loads(INDEX.read_text(encoding="utf-8"))
            if INDEX.exists() else [])
     ts = datetime.now()

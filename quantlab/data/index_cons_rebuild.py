@@ -12,7 +12,13 @@
 - 调样频率简化为**每月末重建**（官方每半年调样+缓冲区，月度近似对回测足够）
 
 精度：与当前官方成分对比重合率（模块内自检，写入表注释）。
-声明：近似成分（市值排名法，股本 as-of 缺口已知），不用于精确归因，
+PIT 口径（2026-09-12 升级）：
+- 市值股本用 share_capital_daily ASOF（<= t 逐日真值，原 finance_snapshot
+  当前股本回填历史 = as-of 未来数据，已废弃）；
+- ST 过滤用 valuation_daily（fsdb 日线 is_st）按月动态判定，原 instruments
+  当前 is_st 回填历史（历史上曾 ST 的股票被误留/现 ST 被误剔）已废弃；
+- board/list_date 为静态属性（上市日期不变），合法保留。
+声明：近似成分（市值排名法），不用于精确归因，
 适合池过滤 / 暴露分析 / 分层选股场景。
 
 表：index_members_hist(index_code, period, code, est_mcap_yi, mcap_rank)
@@ -58,30 +64,51 @@ def rebuild_history(start: str = "2022-01-01") -> dict:
     # 月 × 股 的市值/成交额聚合（一次算全）
     # 分层口径：中证用自由流通市值——近似用流通市值（close × float_shares，
     # 无 float_shares 回退总股本）；总市值对高控股国企偏差过大
+    # PIT：股本走 share_capital_daily ASOF（逐日真值），禁用 finance_snapshot
     df = store.q(f"""
         WITH base AS (
             SELECT date_trunc('month', k.date) AS m, k.code,
-                   k.close, k.amount
+                   k.close, k.amount,
+                   COALESCE(NULLIF(f.float_shares, 0), f.total_shares) AS shares
             FROM kline_daily k
+            ASOF JOIN share_capital_daily f
+              ON f.code = k.code AND k.date >= f.date
             WHERE k.date >= DATE '{lo}' AND k.date <= DATE '{hi}'
               AND k.close > 0
+              AND COALESCE(NULLIF(f.float_shares, 0), f.total_shares) > 0
         )
-        SELECT b.m AS month, b.code,
-               AVG(b.close * COALESCE(NULLIF(f.float_shares, 0), f.total_shares)) / 1e8
-                   AS mcap_yi,
-               AVG(b.amount) / 1e8 AS adv_yi
-        FROM base b
-        JOIN finance_snapshot f ON f.code = b.code
-        WHERE COALESCE(NULLIF(f.float_shares, 0), f.total_shares) > 0
-        GROUP BY b.m, b.code
+        SELECT m AS month, code,
+               AVG(close * shares) / 1e8 AS mcap_yi,
+               AVG(amount) / 1e8 AS adv_yi
+        FROM base
+        GROUP BY m, code
     """)
     if df.empty:
         log.warning("指数重建：无可用数据")
         return {}
-    # 剔除 ST/北交所/次新（NULL 宽容：list_date 缺失视为老股，is_st 缺失视为非 ST）
+    # 剔除北交所/次新（board/list_date 为静态属性，历史适用，PIT 合法）
+    # ST 过滤：按月动态判定（valuation_daily fsdb 日线 is_st，月内任一日
+    # is_st=true 即剔除该月）——instruments.is_st 是当前状态，回填历史
+    # 属 as-of 未来数据，2026-09-12 起禁用
+    import os
+    _vd = os.environ.get(
+        "QUANTLAB_LAKE",
+        "C:/Users/53497/WorkBuddy/2026-09-02-23-42-28/quantlab/data/lake/clean")
+    st = store.q(f"""
+        SELECT code, date_trunc('month', date) AS m,
+               MAX(CAST(is_st AS INTEGER)) AS st
+        FROM read_parquet('{_vd}/fundamental/valuation_daily/**/*.parquet',
+                          union_by_name=true)
+        WHERE date >= DATE '{lo}' AND date <= DATE '{hi}'
+        GROUP BY code, m
+    """)
+    st["m"] = pd.to_datetime(st["m"]).dt.date
+    df["month"] = pd.to_datetime(df["month"]).dt.date
+    df = df.merge(st, on=["code", "month"], how="left")
+    df = df[df["st"].fillna(0) == 0].drop(columns=["st"])
     ok = store.q("""
         SELECT code FROM instruments
-        WHERE NOT COALESCE(is_st, false) AND board != 'BJ'
+        WHERE board != 'BJ'
           AND (list_date IS NULL OR
                list_date <= (SELECT MAX(date) - INTERVAL 90 DAY FROM kline_daily))
     """)

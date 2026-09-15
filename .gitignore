@@ -29,6 +29,22 @@ Thumbs.db
 # ── 临时/工具缓存 ──
 .playwright-cli/
 csi_search_tmp.json
+.tmp/
+
+# ── 生成型看板/报告（可由脚本再生，云端有镜像，不入库）──
+/docs/factor_center_*.html
+/docs/S1s*.html
+
+# ── 会话级一次性运维脚本（下划线前缀 = 临时）──
+/scripts/_*
+/scripts/run_postclose_*.bat
+/scripts/wait_and_check_*.sh
+/scripts/factor_eval/_*.json
+
+# ── PandaAI 抓取实验产物（panda_pull/ 脚本入库，站点 JS/输出不入库）──
+/panda_api_test.json
+/panda_*.html
+/panda_js/
 
 # 密钥（API token 等）绝不入库
 .secrets/

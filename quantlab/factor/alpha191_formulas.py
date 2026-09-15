@@ -334,6 +334,9 @@ def a46(W):
     bands = [ts_mean(W["close"], m) + ts_mean(W["close"] - delay(W["close"], 1), m)
              for m in (3, 5, 10, 15, 20, 30, 35, 40, 45, 50)]
     cnt = sum((W["close"] > b).astype(float) for b in bands) / 10
+    # 泄露修复: 布尔比较对 NaN 判 False, 未上市股票会以 cnt=0 混入截面 rank 分母
+    # (前视: 提前知道"该股将上市")。close 为 NaN 处保持 NaN, 不参与 rank。
+    cnt = cnt.where(W["close"].notna())
     return (rank(cnt) - 0.5) * -1
 
 
@@ -489,7 +492,9 @@ def a69(W):
     for m in (2, 5, 10, 15, 20, 30, 40, 50, 60, 90, 120):
         b = ts_mean(W["close"], m) + ts_mean(W["close"] - delay(W["close"], 1), m)
         cnt = cnt + (b < W["close"]).astype(float)
-    return (rank(cnt / 11) - 0.5) * -1
+    # 泄露修复: 同 alpha046, 未上市股票布尔比较 NaN→False 混入截面 rank 分母
+    cnt = (cnt / 11).where(W["close"].notna())
+    return (rank(cnt) - 0.5) * -1
 
 
 @alpha(70)

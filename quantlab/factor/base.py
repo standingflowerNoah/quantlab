@@ -30,6 +30,14 @@ class Factor(ABC):
     description: str = ""       # 一句话说明
     category: str = "generic"   # price / volume / size / value / tech
     freq: str = "daily"         # daily / weekly
+    # 经济机制登记（R3 维度，因子评价框架 P0-3）：事前声明因子赚钱的机制，
+    # 防事后合理化。取值（可组合，顿号分隔）：
+    #   risk       风险溢价——承担某种风险敞口的补偿（size/低流动性）
+    #   behavioral 行为偏差——他人系统性错误定价的收割（反转/盈余惊喜）
+    #   friction   摩擦结构——制度/交易机制造成的可预测价格模式（涨跌停/隔夜）
+    #   data       数据加工优势——独家或更深度的信息提取（高频信号）
+    # 未登记 = 该因子尚未过经济逻辑审查（不禁止计算，但禁入生产候选）。
+    economic_rationale: str = ""
 
     @abstractmethod
     def compute(self, store, start=None, end=None,

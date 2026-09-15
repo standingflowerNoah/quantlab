@@ -17,8 +17,9 @@
                      cost_t = cost_{t−1}(1−to_t) + vwap_t·to_t，后复权；
                      递推天然数值稳定；PIT 由顺序构造保证）
 
-换手率口径：vol / finance_snapshot.float_shares（当前股本回填历史，
-as-of 缺口为温和未来数据——与现有 turnover_std_20 一致，audit 记 WARN）。
+换手率口径：vol / share_capital_daily.float_shares（逐日真值股本，ASOF 取
+<= t 最近一条 = PIT 正确）。2026-09-11 前用 finance_snapshot 当前股本回填
+历史，属 as-of 缺口，已随 PIT 股本表落地消除。
 clip [0, 0.99] 防全换手/异常股本。
 """
 from __future__ import annotations
@@ -38,7 +39,8 @@ WITH tr AS (
     SELECT k.date, k.code,
            LEAST(GREATEST(k.vol / f.float_shares, 0.0), 0.99) AS to_rate
     FROM kline_daily k
-    JOIN finance_snapshot f ON f.code = k.code
+    ASOF JOIN share_capital_daily f
+      ON f.code = k.code AND k.date >= f.date
     WHERE f.float_shares > 0 AND k.vol > 0 {usql}
 ),
 r AS (
@@ -90,7 +92,8 @@ class ChipVwapBias250(Factor):
                    (k.amount / k.vol) * k.adj_factor AS vwap_adj,
                    LEAST(GREATEST(k.vol / f.float_shares, 0.0), 0.99) AS to_rate
             FROM kline_daily k
-            JOIN finance_snapshot f ON f.code = k.code
+            ASOF JOIN share_capital_daily f
+              ON f.code = k.code AND k.date >= f.date
             WHERE f.float_shares > 0 AND k.vol > 0 AND k.amount > 0 {usql}
         """, params)
         if df.empty:

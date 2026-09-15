@@ -1,8 +1,12 @@
-"""质量因子（基于 finance_snapshot 财务快照）
+"""质量因子（盈利质量与杠杆）
 =====================================
-- roe / op_margin / debt_ratio / ocf_ratio：盈利质量与杠杆。
-- finance_snapshot 为「最新报告期快照」，故这些是当前截面因子
-  （历史深度需随财务快照周更逐步积累）。
+- roe / op_margin / debt_ratio / ocf_ratio 等全部为 finance_history /
+  westock finance_q 多期历史版：每日因子值 = 该日已披露最新报告期的比率，
+  notice_eff / InfoPublDate 生效日记账，无前视（PIT）。
+- 2026-09-06 二批迁移：roe/debt_ratio/ocf_ratio/current_ratio（finance_history）
+- 2026-09-12 迁移：op_margin（finance_q income 阶梯，OperatingProfit/OperatingRevenue；
+  原 finance_snapshot 单点截面废弃——快照当前值回填历史属 as-of 未来数据，
+  audit 已升级为硬闸门，禁止快照表进入因子 SQL）
 
 口径校准（迭代 26）：通达信 zhuyinglirun（主营利润）语义不可靠
 （茅台 94.7亿、万科 6460亿，无法对应任何真实报表科目），
@@ -14,29 +18,23 @@ from __future__ import annotations
 
 from ..base import SqlFactor, universe_sql
 from ..registry import register
+from .fundamental import _INCOME_LADDER
 
 
 class _FinanceFactor(SqlFactor):
-    """从 finance_snapshot 映射的截面因子
+    """（已废弃）finance_snapshot 单点截面基类
 
-    date = report_date（披露日），而非报告期末 report_period：
-    报告期 06-30 的财报实际 07-16~09-02 才披露，用报告期末记账会把
-    未披露的财报数据提前使用（披露前视，PIT 审计会判 FAIL）。
-    记在披露日（盘后公告，与 kline 因子"收盘信息收盘用"假设一致）。
-    注意：通达信 updated_date 随每周重拉变化，不可用作记账键。
+    快照表只有「最新报告期」一行/股，任何引用都是当前值回填历史（as-of
+    未来数据）。2026-09-12 起 audit 对 as-of 引用升级为硬闸门 FAIL，
+    最后一个使用者 op_margin 已迁移 finance_q 多期阶梯，本基类仅留档。
     """
     category = "quality"
     _expr: str = "1.0"
 
     def _sql(self, start=None, end=None, universe=None):
-        usql, uparams = universe_sql(universe)
-        sql = f"""
-        SELECT report_date AS date, code,
-               {self._expr} AS value
-        FROM finance_snapshot
-        WHERE report_date > DATE '2000-01-01' {usql}
-        """
-        return sql, uparams
+        raise NotImplementedError(
+            "finance_snapshot 单点截面因子已废弃（as-of 未来数据，audit 硬闸门）；"
+            "请使用 finance_history / finance_q 多期版")
 
 
 # ── 多期历史版质量因子（finance_history + ASOF 前向填充，2026-09-06 升级）──
@@ -133,10 +131,12 @@ class OcfRatioHist(_HistoryFinanceFactor):
     _expr = "operate_cf / NULLIF(net_profit, 0)"
 
 
-# ── 数据源受限因子（保留 finance_snapshot 单点版，WARN 为预期内口径边界）──
-# finance_history 无 operating_profit / inventory 字段；current_assets/
-# current_liab 列存在但上游未灌数（0/188,954 非空，2026-09-06 实测）——
-# 三者均无法迁移多期版；升级通道：东财资产负债表明细接口补科目后重写。
+# ── 数据源受限科目（历史口径备忘）──
+# finance_history 无 operating_profit / inventory 字段（业绩报表接口缺科目）；
+# current_assets/current_liab 上游未灌数——quick_ratio/current_ratio 已于
+# 2026-09-07 用东财 CURRENT_RATIO/INVENTORY 字段回溯修复；op_margin 已于
+# 2026-09-12 迁 westock finance_q（income 表有 OperatingProfit）。
+# 至此本模块因子 SQL 零引用 finance_snapshot（audit as-of 硬闸门口径）。
 
 # ── 2026-09-07 三批迁移：current_ratio/quick_ratio 回溯修复 ──
 # 根因：finance_history 旧拉取代码读 TOTAL_CURRENT_ASSETS/TOTAL_CURRENT_LIABILITIES
@@ -154,13 +154,33 @@ class CurrentRatioHist(_HistoryFinanceFactor):
     _expr = "current_ratio"
 
 
+# ── 2026-09-12 迁移：op_margin 从 finance_snapshot 单点截面升级为 ──
+# westock finance_q income 阶梯多期版（PIT 硬闸门口径）。
+# 背景：finance_history 无营业利润科目（业绩报表接口缺），但 finance_q
+# income 表有 OperatingProfit/OperatingRevenue（东财 F10 口径，茅台中报
+# 67.71% 与公开一致，5558 只覆盖）。记账于 InfoPublDate 真实披露日，
+# 更正披露压制/同日多期取最新报告期，复用 fundamental._INCOME_LADDER。
+
 @register
-class OpMargin(_FinanceFactor):
+class OpMarginHist(SqlFactor):
     name = "op_margin"
-    description = ("营业利润率 operating_profit/revenue（盈利能力，已实证校验口径；"
-                   "finance_snapshot 单点截面——业绩报表无营业利润科目，"
-                   "F10 利润表逐股拉取成本高，暂不回溯）")
-    _expr = "operating_profit / NULLIF(revenue, 0)"
+    description = ("营业利润率 OperatingProfit/OperatingRevenue（盈利能力，"
+                   "finance_q 多期版，InfoPublDate 披露日记账无前视；"
+                   "2026-09-12 迁移，原 finance_snapshot 单点截面废弃）")
+    category = "quality"
+    freq = "daily"
+
+    def _sql(self, start=None, end=None, universe=None):
+        usql, uparams = universe_sql(universe)
+        expr = "OperatingProfit / NULLIF(OperatingRevenue, 0)"
+        sql = f"""
+{_INCOME_LADDER}
+SELECT k.date, g.code, ({expr}) AS value
+FROM kline_daily k
+ASOF JOIN g ON g.code = k.code AND g.pub <= k.date
+WHERE ({expr}) IS NOT NULL AND isfinite({expr}) {usql}
+"""
+        return sql, uparams
 
 
 @register

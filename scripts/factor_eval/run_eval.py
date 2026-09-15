@@ -95,19 +95,27 @@ def audit_info(name: str) -> dict | None:
 
 
 # ─────────────────── 因子：逐日序列 / 年度 / 分组 / 滚动 ───────────────────
-def factor_daily_metrics(name: str, horizon: int, start: str, end: str) -> tuple:
+def factor_daily_metrics(name: str, horizon: int, start: str, end: str,
+                         pool: str = "ashare_ex") -> tuple:
     """返回 (daily, yearly, extra)：逐日 IC+五分位组收益；年度聚合；
-    extra 含滚动 12M ICIR / 连续同号段 / 分组单调性 / 全期统计"""
+    extra 含滚动 12M ICIR / 连续同号段 / 分组单调性 / 全期统计
+    pool!=ashare_ex 时按池 PIT 成员过滤（与 metric_store._pool_ctes 同源）"""
     parts = sorted((FACTOR_DIR / name).glob("part-*.parquet"))
     if not parts:
         raise FileNotFoundError(f"{FACTOR_DIR / name} 无 parquet")
     plist = [str(p) for p in parts]
+    if pool == "ashare_ex":
+        pool_ctes, f_def = "", "SELECT * FROM f_raw"
+    else:
+        from quantlab.factor.metric_store import _pool_ctes
+        pool_ctes, f_def, _ = _pool_ctes(pool)
     con = duckdb.connect()
     con.execute(f"ATTACH '{DB}' AS maindb (READ_ONLY)")
     q = f"""
-    WITH f AS (
+    WITH f_raw AS (
         SELECT date, code, value FROM read_parquet({plist})
-        WHERE date BETWEEN DATE '{start}' AND DATE '{end}'),
+        WHERE date BETWEEN DATE '{start}' AND DATE '{end}'){pool_ctes},
+    f AS ({f_def}),
     px AS (
         SELECT date, code, close * adj_factor AS c FROM maindb.kline_daily),
     base AS (
@@ -120,7 +128,9 @@ def factor_daily_metrics(name: str, horizon: int, start: str, end: str) -> tuple
                RANK() OVER (PARTITION BY date ORDER BY v) AS rv,
                RANK() OVER (PARTITION BY date ORDER BY fwd) AS rf,
                NTILE(5) OVER (PARTITION BY date ORDER BY v) AS quint
-        FROM base WHERE fwd IS NOT NULL)
+               -- v 非空必须过滤：NULL v 行参与 fwd 排名会非均匀移位
+               -- 真实 rf 秩（sue_i 财报季 70% NULL 行时 IC 可差 0.15+）
+               FROM base WHERE v IS NOT NULL AND fwd IS NOT NULL)
     SELECT date, corr(rv, rf) AS ic,
            AVG(CASE WHEN quint = 1 THEN fwd END) AS q1_ret,
            AVG(CASE WHEN quint = 2 THEN fwd END) AS q2_ret,

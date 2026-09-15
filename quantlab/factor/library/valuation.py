@@ -15,7 +15,11 @@ from ..registry import register
 
 
 class _KlineSharesFactor(SqlFactor):
-    """kline JOIN finance_snapshot 的历史因子（按股本口径）"""
+    """kline ASOF JOIN share_capital_daily 的历史因子（PIT 逐日股本口径）
+
+    2026-09-11 起改用 share_capital_daily（逐日真值股本），取代
+    finance_snapshot（当前股本回填历史，as-of 缺口）。
+    """
     category = "size"
     _expr: str = "1.0"
 
@@ -24,7 +28,8 @@ class _KlineSharesFactor(SqlFactor):
         sql = f"""
         SELECT k.date, k.code, {self._expr} AS value
         FROM kline_daily k
-        JOIN finance_snapshot f ON f.code = k.code
+        ASOF JOIN share_capital_daily f
+          ON f.code = k.code AND k.date >= f.date
         WHERE f.float_shares > 0 {usql}
         """
         return sql, uparams
@@ -35,6 +40,9 @@ class Size(_KlineSharesFactor):
     name = "size"
     description = "对数流通市值 ln(close×float_shares/1e8 亿元)"
     category = "size"
+    economic_rationale = ("risk+behavioral：小市值溢价——流动性差/退市/信息不对称的"
+                           "风险补偿；兼有机构持仓排除（中证1000外）与彩票偏好成分；"
+                           "FDR 单因子 q=0.12 不过显著闸门，组合层 A/B 为其存活证据")
     _expr = "LN(k.close * f.float_shares / 1e8)"
 
 
@@ -55,11 +63,11 @@ class Turnover(_KlineSharesFactor):
 
 
 class _HistMcapValueFactor(SqlFactor):
-    """国泰君安估值因子（多期历史版，2026-09-06 升级）
+    """国泰君安估值因子（多期历史版，2026-09-06 升级；2026-09-11 换 PIT 股本）
 
     分子 = finance_history 该日已披露最新报告期的财务科目（ASOF 前向填充，
-    披露日记账无前视）；分母 = 当日收盘 × 总股本（finance_snapshot 当前股本，
-    股本 as-of 缺口为已知 WARN，随财务快照积累缓解）。
+    披露日记账无前视）；分母 = 当日收盘 × 当日总股本
+    （share_capital_daily 逐日真值，ASOF 取 <= t 最近一条 = PIT 正确）。
     净利/营收/现金流为累计口径（Q2 即半年累计，未年化）。
     """
     category = "value"
@@ -87,7 +95,8 @@ class _HistMcapValueFactor(SqlFactor):
         FROM kline_daily k
         ASOF JOIN g
           ON g.code = k.code AND g.notice_date <= k.date
-        JOIN finance_snapshot fs ON fs.code = k.code
+        ASOF JOIN share_capital_daily fs
+          ON fs.code = k.code AND k.date >= fs.date
         WHERE g.fin IS NOT NULL AND k.close > 0 AND fs.total_shares > 0 {usql}
         """
         return sql, uparams

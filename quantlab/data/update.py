@@ -292,6 +292,34 @@ def update_all(date=None, domains: list[str] | None = None,
     run("block_trade", lambda: update_block_trade(date))
     run("hot_topic", lambda: update_hot_topic(date))
     run("northbound_daily", lambda: update_northbound(date))
+    # 4b. xiaodefa tushare 代理湖表增量（严重异动/资金流/曾用名/停复牌/涨跌停/bench 指数）
+    from .sources.xd_tushare import (update_stk_high_shock, update_moneyflow,
+                                     update_namechange, update_suspend,
+                                     update_limit_list, update_bench_index,
+                                     update_stk_shock, update_cyq_perf,
+                                     update_margin_secs, update_ah_comparison,
+                                     update_stk_surv, update_repurchase,
+                                     update_holdertrade, update_auction,
+                                     update_opt_daily)
+    run("stk_high_shock", lambda: update_stk_high_shock(date))
+    run("moneyflow", lambda: update_moneyflow(date))
+    run("namechange", lambda: update_namechange(date))
+    run("suspend", lambda: update_suspend(date))
+    run("limit_list", lambda: update_limit_list(date))
+    run("index_daily", lambda: update_bench_index(date))
+    # 4b+. 批次 2 域（个股异常波动/筹码胜率/两融标的/AH比价/调研/回购/增减持/竞价/期权）
+    run("stk_shock", lambda: update_stk_shock(date))
+    run("cyq_perf", lambda: update_cyq_perf(date))
+    run("margin_secs", lambda: update_margin_secs(date))
+    run("ah_comparison", lambda: update_ah_comparison(date))
+    run("stk_surv", lambda: update_stk_surv(date))
+    run("repurchase", lambda: update_repurchase(date))
+    run("holdertrade", lambda: update_holdertrade(date))
+    run("stk_auction", lambda: update_auction(date))
+    run("opt_daily", lambda: update_opt_daily(date))
+    # 4c. 龙虎榜席位明细（此前未接线，水位停在手动回补日）
+    from .dragon_seats import update_dragon_seats
+    run("dragon_seats", lambda: update_dragon_seats())
     # 5. 低频域（按水位间隔触发）
     wm = store.get_watermark("finance_snapshot")
     if _days_since(wm) >= 7:
@@ -334,6 +362,11 @@ def update_all(date=None, domains: list[str] | None = None,
         run("fund_flow_daily", _ff)
     else:
         results["fund_flow_daily"] = "degraded (push2his 不可达)"
+
+    # 7. tushare 冗余兜底（2026-09-14）：主源与 fsdb/sina 兜底后仍未推进的域，
+    #    用 xiaodefa tushare 代理再补一轮（09-11 TDX 全挂+fsdb 上游滞后事故根治）
+    from .sources.ts_redundancy import sweep as ts_sweep
+    run("tushare_redundancy", lambda: ts_sweep(store, target, results))
 
     log.info("更新完成: " + " | ".join(f"{k}:{v.split(' ')[0]}" for k, v in results.items()))
 

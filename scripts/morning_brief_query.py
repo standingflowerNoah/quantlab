@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """盘前信号快照查询：signal_portfolio_multi 每模型最新快照 + signal_portfolio 生产表最新快照"""
 import duckdb, json, sys, io
+from datetime import date as _date
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 con = duckdb.connect("data/quant.duckdb", read_only=True)
@@ -56,9 +57,7 @@ from collections import Counter
 mode_date = Counter(dates.values()).most_common(1)[0][0]
 
 lines = []
-lines.append(f"📊 QuantLab 盘前模型信号简报（2026-09-11 · 数据修正版 · 快照日 {mode_date}）")
-lines.append("")
-lines.append("> 🔁 早间推送因通达信故障用的是 09-09 快照，本条为 09-10 数据补齐后的更正版，以此为准")
+lines.append(f"📊 QuantLab 盘前模型信号简报（{_date.today():%Y-%m-%d} 盘前 · 快照日 {mode_date}）")
 lines.append("")
 for model in sorted(by_model.keys()):
     rows = by_model[model]

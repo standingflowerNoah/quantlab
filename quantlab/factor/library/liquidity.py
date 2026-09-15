@@ -20,6 +20,8 @@ class Amihud20(SqlFactor):
     name = "amihud_20"
     description = "Amihud 非流动性 |日收益|/亿元成交额 的20日均值（低流动性溢价）"
     category = "liquidity"
+    economic_rationale = ("risk：非流动性溢价——持有高冲击成本股票的风险补偿"
+                          "（Amihud 2002）；与容量直接对冲（本因子升=组合容量降）")
 
     def _sql(self, start=None, end=None, universe=None):
         usql, uparams = universe_sql(universe)
@@ -56,7 +58,8 @@ class TurnoverStd20(SqlFactor):
         WITH tr AS (
             SELECT k.date, k.code, k.vol / f.float_shares AS to_rate
             FROM kline_daily k
-            JOIN finance_snapshot f ON f.code = k.code
+            ASOF JOIN share_capital_daily f
+              ON f.code = k.code AND k.date >= f.date
             WHERE f.float_shares > 0 {usql}
         )
         SELECT date, code,

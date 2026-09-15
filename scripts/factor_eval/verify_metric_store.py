@@ -36,7 +36,7 @@ def check_against_run_eval(pool: str) -> list[tuple]:
     for name in SAMPLE_FACTORS:
         try:
             daily, _, _ = factor_daily_metrics(name, 5, "2022-01-01",
-                                               "2026-09-10")
+                                               "2026-09-10", pool=pool)
         except FileNotFoundError:
             print(f"  [skip] {name} 无因子湖数据")
             continue

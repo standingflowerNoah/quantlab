@@ -184,6 +184,66 @@ def check_all(sample: int = 30) -> pd.DataFrame:
     except Exception as e:
         add("factor_lake", "consistency", "fail", f"因子水位检查异常: {e}")
 
+    # ── 7. 硬不变量：总市值 >= 流通市值（total_shares >= float_shares）──
+    # 2026-09-11 事故：tencent_source 把接口 [44](流通市值) / [45](总市值) 写反，
+    # 导致 09-03/04/07/08/11 全市场约 59% 的行「总市值 < 流通市值」——数学不可能。
+    # 该错位会污染 universe 的 top 系池（按 float_mcap_yi 排序）与容量估算。
+    # 教训：外部接口按**下标**取值必须配不变量防线。
+    try:
+        r = query("""
+            SELECT COUNT(*) AS n,
+                   SUM(CASE WHEN mcap_yi < float_mcap_yi * 0.999
+                            THEN 1 ELSE 0 END) AS bad
+            FROM daily_snapshot
+            WHERE date = (SELECT MAX(date) FROM daily_snapshot)
+              AND mcap_yi > 0 AND float_mcap_yi > 0""")
+        n, bad = int(r.iloc[0, 0]), int(r.iloc[0, 1] or 0)
+        if n == 0:
+            add("daily_snapshot", "invariant", "warn", "当日快照无有效市值数据")
+        elif bad == 0:
+            add("daily_snapshot", "invariant", "pass",
+                f"最新快照 {n} 只市值口径正常（总市值>=流通市值）")
+        else:
+            add("daily_snapshot", "invariant", "fail",
+                f"最新快照 {bad}/{n} 只「总市值<流通市值」（不可能）——"
+                f"疑似市值列错位，请检查 tencent_source 字段索引")
+    except Exception as e:
+        add("daily_snapshot", "invariant", "fail", f"检查异常: {e}")
+
+    # ── 8. 硬不变量：PIT 股本表 share_capital_daily ────────────────
+    # 总股本 >= 流通股本 恒真。判定用 1e-6 相对容差（上游浮点噪声，
+    # 如 601166 报 211.628519 亿 vs 211.628552 亿）。北交所（92/83/87/43 开头）
+    # 数据源两字段疑语义互换，且不在 ashare_ex/ashare_main 研究池内 → 单列 WARN。
+    try:
+        r = query("""
+            SELECT COUNT(*) AS n,
+                   SUM(CASE WHEN total_shares < float_shares * (1 - 1e-6)
+                            THEN 1 ELSE 0 END) AS bad,
+                   SUM(CASE WHEN total_shares < float_shares * (1 - 1e-6)
+                             AND NOT (code LIKE '92%' OR code LIKE '83%'
+                                      OR code LIKE '87%' OR code LIKE '43%')
+                            THEN 1 ELSE 0 END) AS bad_nonbj,
+                   MIN(date) AS first_date, MAX(date) AS last_date
+            FROM share_capital_daily""")
+        n = int(r.iloc[0, 0] or 0)
+        bad = int(r.iloc[0, 1] or 0)
+        bad_nonbj = int(r.iloc[0, 2] or 0)
+        if n == 0:
+            add("share_capital_daily", "invariant", "warn",
+                "PIT 股本表为空，请跑 scripts/backfill_share_capital.py")
+        elif bad_nonbj > 0:
+            add("share_capital_daily", "invariant", "fail",
+                f"{bad_nonbj}/{n} 行非北交所 total_shares < float_shares（不可能）"
+                f"——跑 scripts/fix_share_capital_conflict.py")
+        elif bad > 0:
+            add("share_capital_daily", "invariant", "warn",
+                f"{bad}/{n} 行为北交所股本冲突（研究池已剔除，不影响因子）")
+        else:
+            add("share_capital_daily", "invariant", "pass",
+                f"{n} 行股本口径正常（{r.iloc[0, 3]} ~ {r.iloc[0, 4]}）")
+    except Exception as e:
+        add("share_capital_daily", "invariant", "warn", f"检查跳过: {e}")
+
     return pd.DataFrame(issues)
 
 

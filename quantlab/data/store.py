@@ -217,8 +217,16 @@ class Store:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    def append_factor(self, factor_name: str, df: pd.DataFrame):
-        """因子截面追加写 Parquet（按年份分区文件）"""
+    def append_factor(self, factor_name: str, df: pd.DataFrame,
+                      replace: bool = False):
+        """因子截面追加写 Parquet（按年份分区文件）
+
+        replace=False（默认）：与已有文件合并，`keep="last"` 让新值覆盖同 (date,code)
+            的旧值。**注意：新计算未产出的行会保留旧值**（口径切换后代码退出覆盖时，
+            旧值会静默残留 → PIT 自检会抓到"截断重算与全量不一致"）。
+        replace=True：新 df 覆盖到的年份**整年重写**（旧值不残留）。适用于
+            「口径变更后全量重算」，要求 df 覆盖该年的完整历史。
+        """
         if df is None or df.empty:
             return 0
         self._writable()
@@ -228,14 +236,17 @@ class Store:
         for year in sorted(dates.dt.year.unique()):
             part = df[dates.dt.year == year]
             f = d / f"part-{year}.parquet"
-            old = pd.read_parquet(f) if f.exists() else pd.DataFrame()
-            if not old.empty:
-                merged = pd.concat([old, part], ignore_index=True)
-                merged = (merged.drop_duplicates(subset=["date", "code"],
-                                                keep="last")
-                          .sort_values(["date", "code"]))
+            if replace:
+                merged = part                      # 整年重写，不留旧行
             else:
-                merged = part
+                old = pd.read_parquet(f) if f.exists() else pd.DataFrame()
+                if not old.empty:
+                    merged = pd.concat([old, part], ignore_index=True)
+                    merged = (merged.drop_duplicates(subset=["date", "code"],
+                                                     keep="last")
+                              .sort_values(["date", "code"]))
+                else:
+                    merged = part
             merged.to_parquet(f, index=False)
             written += len(part)
         return written
@@ -283,7 +294,7 @@ class Store:
                      "dividend_events", "dragon_tiger", "hot_topic",
                      "northbound_daily", "margin_total", "lockup",
                      "block_trade", "holder_num", "fund_flow_daily",
-                     "index_members"]
+                     "index_members", "share_capital_daily"]
 
     def export_mirror(self):
         """导出核心表 Parquet 镜像（更新任务完成后调用，供无锁查询）"""

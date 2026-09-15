@@ -58,6 +58,9 @@ class OvernightMom20(_SplitFactor):
     name = "overnight_mom_20"
     description = "20日隔夜收益均值（隔夜动量；一字板日剔除，后复权）"
     freq = "daily"
+    economic_rationale = ("friction：隔夜/日内结构——集合竞价机制与隔夜信息定价"
+                          "的系统性差异；独立因子已三度证伪（执行层不可收割），"
+                          "仅作诊断/分档维度（要求分档变量 PIT）")
     _expr = """
 SELECT date, code,
        CASE WHEN COUNT(overnight) OVER w20 >= 15

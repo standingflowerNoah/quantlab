@@ -442,10 +442,7 @@ WITH i AS (
     FROM b
 ), gp AS (
     SELECT ji.code AS code, ji.rp AS rp, ji.pub AS pub,
-           ji.GrossProfitTTM / NULLIF(jb.total_assets, 0) AS gpoa,
-           LAG(ji.rp, 4) OVER (PARTITION BY ji.code ORDER BY ji.rp) AS rp_lag4,
-           LAG(ji.GrossProfitTTM / NULLIF(jb.total_assets, 0), 4)
-               OVER (PARTITION BY ji.code ORDER BY ji.rp) AS gpoa_lag4
+           ji.GrossProfitTTM / NULLIF(jb.total_assets, 0) AS gpoa
     FROM ji JOIN jb ON ji.code = jb.code AND ji.rp = jb.rp AND jb.rk = 1
     WHERE ji.rk = 1 AND jb.total_assets > 0
 )
@@ -454,9 +451,17 @@ WITH i AS (
 
 @register
 class SueGpoa(SqlFactor):
-    """GPOA TTM 的 8 期 z-score（质量维度的超预期，开源 2025）"""
+    """GPOA TTM 的 8 期 z-score（质量维度的超预期，开源 2025）
+
+    2026-09-12 修：原「ROWS BETWEEN 8 PRECEDING」按**行数**取窗口，对缺期
+    敏感——某期财报延迟披露时（实测 300995 的 2023 年报拖到 2025-04-15），
+    截断数据里少一行会把窗口整体位移，等价于隐含使用「未来会存在这一期」
+    的信息（PIT 审计判 FAIL）。改为**以本期披露日为锚**：取「rp < 本期 且
+    pub <= 本期披露日」的最近 8 期，窗口集合与「当期可知信息」一一对应，
+    与未来是否补披露无关。
+    """
     name = "sue_gpoa"
-    description = "GPOA 8 期 z-score（质量超预期，三表，PIT=首次披露日）"
+    description = "GPOA 8 期 z-score（质量超预期，三表，锚定本期披露日的 8 期回看）"
     category = "surprise"
     freq = "daily"
 
@@ -464,15 +469,19 @@ class SueGpoa(SqlFactor):
         usql, uparams = universe_sql(universe)
         sql = f"""
 {_GPOA_COMMON}
-, w AS (
-    SELECT code, rp, pub, gpoa AS v,
-           AVG(gpoa) OVER (PARTITION BY code ORDER BY rp
-               ROWS BETWEEN 8 PRECEDING AND 1 PRECEDING) AS mu,
-           STDDEV(gpoa) OVER (PARTITION BY code ORDER BY rp
-               ROWS BETWEEN 8 PRECEDING AND 1 PRECEDING) AS sd,
-           COUNT(gpoa) OVER (PARTITION BY code ORDER BY rp
-               ROWS BETWEEN 8 PRECEDING AND 1 PRECEDING) AS n
-    FROM gp WHERE gpoa IS NOT NULL
+, pc AS (
+    SELECT c.code, c.rp, c.pub, c.gpoa AS v, p.rp AS p_rp, p.gpoa AS p_g,
+           ROW_NUMBER() OVER (PARTITION BY c.code, c.rp
+                              ORDER BY p.rp DESC) AS prk
+    FROM gp c
+    JOIN gp p ON p.code = c.code AND p.rp < c.rp
+            AND p.pub <= c.pub AND p.gpoa IS NOT NULL
+    WHERE c.gpoa IS NOT NULL
+), w AS (
+    SELECT code, rp, pub, v,
+           AVG(p_g) AS mu, STDDEV_SAMP(p_g) AS sd, COUNT(p_g) AS n
+    FROM pc WHERE prk <= 8
+    GROUP BY code, rp, pub, v
 ), z AS (
     SELECT code, rp, pub,
            LEAST(10, GREATEST(-10, (v - mu) / NULLIF(sd, 0))) AS value
@@ -492,9 +501,16 @@ WHERE g.value IS NOT NULL AND isfinite(g.value) {usql}
 
 @register
 class GpoaChg(SqlFactor):
-    """ΔGPOA：GPOA − 4 期前 GPOA（雪球 ΔQuality 子项）"""
+    """ΔGPOA：GPOA − 4 期前 GPOA（雪球 ΔQuality 子项）
+
+    2026-09-12 修：原「LAG(gpoa,4) + 月差=12 校验」按**行数**取滞后，对缺期
+    敏感（300995 的 2023 年报延迟披露 → 全量版行序窗口位移，隐含用了
+    「未来会存在这一期」的信息）。改为**按报告期自连接**：直接取
+    `rp - INTERVAL 12 MONTH` 那一期（并要求其披露日 <= 本期披露日），
+    与行序无关。
+    """
     name = "gpoa_chg"
-    description = "GPOA 改善（GPOA − LAG4，三表，PIT，缺期防护）"
+    description = "GPOA 同比改善（GPOA − 12 个月前报告期，三表，PIT，按期自连接）"
     category = "quality"
     freq = "daily"
 
@@ -502,11 +518,20 @@ class GpoaChg(SqlFactor):
         usql, uparams = universe_sql(universe)
         sql = f"""
 {_GPOA_COMMON}
-, d AS (
-    SELECT code, rp, pub,
-           CASE WHEN date_diff('month', rp_lag4, rp) = 12
-                THEN gpoa - gpoa_lag4 ELSE NULL END AS chg
-    FROM gp
+, pc AS (
+    SELECT c.code, c.rp, c.pub, c.gpoa,
+           p.rp AS p_rp, p.gpoa AS gpoa_lag,
+           ROW_NUMBER() OVER (PARTITION BY c.code, c.rp
+                              ORDER BY p.rp DESC) AS prk
+    FROM gp c
+    JOIN gp p ON p.code = c.code AND p.rp < c.rp
+            AND p.pub <= c.pub AND p.gpoa IS NOT NULL
+    WHERE c.gpoa IS NOT NULL
+), d AS (
+    SELECT code, rp, pub, gpoa, p_rp, gpoa_lag,
+           CASE WHEN date_diff('month', p_rp, rp) = 12
+                THEN gpoa - gpoa_lag ELSE NULL END AS chg
+    FROM pc WHERE prk = 4
 ), g AS (
     SELECT *, ROW_NUMBER() OVER (
         PARTITION BY code, pub ORDER BY rp DESC) AS rk

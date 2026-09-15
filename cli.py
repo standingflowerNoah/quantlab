@@ -60,6 +60,22 @@ def cmd_data(args: list[str]):
                 sample = int(rest[i + 1])
         df = check_all(sample=sample)
         print(df.to_string(index=False))
+    elif sub == "ts-sweep":
+        # tushare 冗余兜底手动触发：data ts-sweep [--date YYYYMMDD]
+        import pandas as pd
+        from quantlab.data.sources.ts_redundancy import sweep
+        from quantlab.data import calendar as _cal
+        store = Store()
+        tgt = None
+        for i, a in enumerate(rest):
+            if a == "--date" and i + 1 < len(rest):
+                tgt = pd.Timestamp(rest[i + 1])
+        if tgt is None:
+            d = store.q("SELECT max(trade_date) AS d FROM trade_calendar")["d"][0]
+            tgt = pd.Timestamp(d) if d is not None else _cal.last_trading_day()
+        n = sweep(store, tgt)
+        store.close()
+        print(f"tushare 冗余兜底完成: 回补 {n} 域（目标交易日 {tgt.date()}）")
     elif sub == "status":
         from quantlab.data.update import update_plan
         print(update_plan().to_string(index=False))
@@ -155,7 +171,8 @@ def cmd_factor(args: list[str]):
         df = compute_factor(
             name,
             universe=_opt("--universe"),
-            start=_opt("--start"), end=_opt("--end"))
+            start=_opt("--start"), end=_opt("--end"),
+            rebuild="--rebuild" in rest)
         if df.empty:
             print(f"{name}: (空结果)")
         else:

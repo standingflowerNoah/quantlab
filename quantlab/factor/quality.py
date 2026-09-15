@@ -102,6 +102,112 @@ def _factor_ic_sql(name: str, horizon: int, store: Store,
         return None
 
 
+def factor_ic_extended(name: str, horizons: tuple = (1, 5, 20),
+                        start=None, end=None, min_n: int = 30,
+                        store: Store | None = None) -> dict | None:
+    """Pearson IC + Rank IC 双类型 × 多 horizon 汇总（单查询每 horizon）
+
+    返回：
+      {"n_days": N, "avg_n": M,
+       "rank_ic{h}"/"rank_icir{h}"/"rank_win{h}",
+       "pearson_ic{h}"/"pearson_icir{h}"/"pearson_win{h}"  (h ∈ horizons)}
+    无数据（因子缺失/行数不足）返回 None。
+    """
+    if store is None:
+        store = Store(readonly=True)
+    from pathlib import Path
+    factor_dir = Path(store.factor_dir(name))
+    files = sorted(factor_dir.glob("part-*.parquet"))
+    if not files:
+        return None
+    paths = ", ".join("'" + str(f).replace("\\", "/") + "'" for f in files)
+    desc = store.q(
+        f"DESCRIBE SELECT * FROM read_parquet(['{files[0].as_posix()}'])")
+    vcol = "value" if "value" in set(desc["column_name"]) else "score"
+
+    out: dict = {}
+    # 三 horizon 合并为单查询：kline_daily 只扫一次（LEAD 三列 + 各自 null 过滤后 rank）
+    h_list = list(horizons)
+    leads = ", ".join(
+        f"LEAD(c, {h}) OVER (PARTITION BY f.code ORDER BY f.date) / c - 1 AS fw{h}"
+        for h in h_list)
+    r_ctes = ",\n        ".join(
+        f"r{h} AS (SELECT date, v, fw{h} AS fw, "
+        f"RANK() OVER (PARTITION BY date ORDER BY v) AS rv, "
+        f"RANK() OVER (PARTITION BY date ORDER BY fw{h}) AS rf "
+        f"FROM base WHERE v IS NOT NULL AND fw{h} IS NOT NULL)"
+        for h in h_list)
+    a_ctes = ",\n        ".join(
+        f"a{h} AS (SELECT date, COUNT(*) AS n{h}, "
+        f"corr(v, fw) AS pic{h}, corr(rv, rf) AS ric{h} "
+        f"FROM r{h} GROUP BY date HAVING COUNT(*) >= {min_n})"
+        for h in h_list)
+    joins = f"a{h_list[0]}" + "".join(
+        f" FULL JOIN a{h2} USING (date)" for h2 in h_list[1:])
+    cols = ", ".join(
+        f"ANY_VALUE(pic{h}) AS pic{h}, ANY_VALUE(ric{h}) AS ric{h}, "
+        f"ANY_VALUE(n{h}) AS n{h}"
+        for h in h_list)
+    sql = f"""
+    WITH f AS (
+        SELECT CAST(date AS DATE) AS date, code, {vcol} AS v
+        FROM read_parquet([{paths}])
+    ),
+    px AS (
+        SELECT date, code, close * adj_factor AS c FROM kline_daily
+        WHERE date >= (SELECT min(date) FROM f)
+          AND date <= (SELECT max(date) FROM f)
+    ),
+    j AS (
+        SELECT f.date AS date, f.code AS code, f.v AS v, {leads}
+        FROM f JOIN px ON f.date = px.date AND f.code = px.code
+    ),
+    base AS (SELECT date, v, {", ".join(f"fw{h}" for h in h_list)}
+             FROM j),
+    {r_ctes},
+    {a_ctes},
+    alld AS (
+        SELECT date, {cols}
+        FROM {joins}
+        GROUP BY date
+    )
+    SELECT date, {", ".join(f"pic{h}, ric{h}, n{h}" for h in h_list)}
+    FROM alld ORDER BY date
+    """
+    try:
+        df = store.q(sql)
+    except Exception as e:
+        log.warning(f"因子 {name} 双类型 IC 计算失败：{e}")
+        return None
+    if df is None or df.empty:
+        return None
+    if start is not None:
+        df = df[df["date"] >= pd.to_datetime(start)]
+    if end is not None:
+        df = df[df["date"] <= pd.to_datetime(end)]
+    if df.empty:
+        return None
+
+    def _stats(s: pd.Series) -> tuple:
+        if s.empty or s.std() == 0:
+            return (None, None, None)
+        return (round(float(s.mean()), 4),
+                round(float(s.mean() / s.std()), 4),
+                round(float((s > 0).mean()), 4))
+
+    for h in h_list:
+        pic = df[f"pic{h}"].dropna()
+        ric = df[f"ric{h}"].dropna()
+        out["pearson_ic%d" % h], out["pearson_icir%d" % h], \
+            out["pearson_win%d" % h] = _stats(pic)
+        out["rank_ic%d" % h], out["rank_icir%d" % h], \
+            out["rank_win%d" % h] = _stats(ric)
+        out["n_days_h%d" % h] = int(df[f"n{h}"].notna().sum())
+    out["n_days"] = int(len(df))
+    out["avg_n"] = int(df[[f"n{h}" for h in h_list]].mean().mean())
+    return out or None
+
+
 def factor_ic(name: str, horizon: int = 5,
               start=None, end=None, min_n: int = 30) -> pd.DataFrame:
     """逐日截面 Rank IC 序列"""

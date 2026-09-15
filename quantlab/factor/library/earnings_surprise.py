@@ -81,7 +81,8 @@ class _SueBase(SqlFactor):
 class SueFactor(_SueBase):
     name = "sue"
     description = ("标准化预期外盈利 SUE：(净利季差分 − 过去8季差分均值) / "
-                   "过去8期误差标准差；披露日(notice_eff)记账，阶梯填充")
+                   "过去8期误差标准差；记账日=MAX(当期, 窗口内上期 notice_eff)（PIT："
+                   "保证窗口成分全部已披露），阶梯填充")
     freq = "daily"
 
     def _body(self) -> str:
@@ -98,19 +99,20 @@ d AS (                                   -- 季差分 dq = Q(t) − Q(t−4)
 d2 AS (                                  -- δ_t = 过去8季差分均值（不含当期）
     SELECT code, report_period, notice_eff, qs, dq,
            AVG(dq) OVER w8 AS delta,
-           COUNT(dq) OVER w8 AS delta_n
+           COUNT(dq) OVER w8 AS delta_n,
+           MAX(notice_eff) OVER w8 AS pub_max  -- 泄露修复: δ/σ 窗口成分的最晚披露日
     FROM d
     WINDOW w8 AS (PARTITION BY code ORDER BY qs
                   RANGE BETWEEN 8 PRECEDING AND 1 PRECEDING)
 ),
 e AS (                                   -- 误差 ε_t = ΔQ_t − δ_t
-    SELECT code, report_period, notice_eff, qs,
+    SELECT code, report_period, notice_eff, qs, pub_max,
            dq - delta AS err
     FROM d2
     WHERE delta IS NOT NULL AND delta_n >= {min_win}
 ),
 e2 AS (                                  -- σ_t = 过去8期误差标准差（不含当期）
-    SELECT code, report_period, notice_eff,
+    SELECT code, report_period, notice_eff, pub_max,
            err,
            STDDEV_SAMP(err) OVER w8 AS sigma,
            COUNT(err) OVER w8 AS sigma_n
@@ -119,16 +121,16 @@ e2 AS (                                  -- σ_t = 过去8期误差标准差（�
                   RANGE BETWEEN 8 PRECEDING AND 1 PRECEDING)
 ),
 sue AS (                                 -- SUE = ε / σ，clip ±10
-    SELECT code, report_period, notice_eff,
+    SELECT code, report_period, notice_eff, pub_max,
            LEAST(GREATEST(err / sigma, -10), 10) AS value
     FROM e2
     WHERE sigma IS NOT NULL AND sigma > 1e-12 AND sigma_n >= {min_win}
 ),
 g AS (
     SELECT code, notice_date, value FROM (
-        SELECT code, notice_eff AS notice_date, value,
+        SELECT code, GREATEST(notice_eff, pub_max) AS notice_date, value,
                ROW_NUMBER() OVER (
-                 PARTITION BY code, notice_eff
+                 PARTITION BY code, GREATEST(notice_eff, pub_max)
                  ORDER BY report_period DESC) AS rk
         FROM sue
     ) WHERE rk = 1
@@ -141,7 +143,8 @@ g AS (
 class EarningsAcceleration(_SueBase):
     name = "earnings_accel"
     description = ("盈利加速：当期净利同比 − 上期净利同比（相邻季度差分，两期基数>0）；"
-                   "披露日(notice_eff)记账，阶梯填充")
+                   "记账日=MAX(当期, 上期 notice_eff)（PIT：上期同比依赖上期净利，"
+                   "须待其披露），阶梯填充")
     freq = "daily"
 
     def _body(self) -> str:
@@ -161,21 +164,25 @@ a AS (
     SELECT code, report_period, notice_eff, np_yoy,
            np_yoy - LAG(np_yoy) OVER (PARTITION BY code ORDER BY qs) AS accel_raw,
            qs - LAG(qs) OVER (PARTITION BY code ORDER BY qs) AS qs_gap,
-           LAG(np_yoy) OVER (PARTITION BY code ORDER BY qs) AS yoy_prev
+           LAG(np_yoy) OVER (PARTITION BY code ORDER BY qs) AS yoy_prev,
+           LAG(notice_eff) OVER (PARTITION BY code ORDER BY qs) AS notice_prev
     FROM y
 ),
 acc AS (                                 -- 仅相邻季度差分有效（防缺期跨期比较）
     SELECT code, report_period, notice_eff,
            CASE WHEN qs_gap = 1 AND yoy_prev IS NOT NULL
                 THEN LEAST(GREATEST(accel_raw, -5), 5)   -- 加速度 clip ±5
-           END AS value
+           END AS value,
+           CASE WHEN qs_gap = 1 AND yoy_prev IS NOT NULL
+                THEN GREATEST(notice_eff, notice_prev)
+           END AS pub_eff                 -- 泄露修复: 上期同比依赖上期净利披露, 记账取两期较晚
     FROM a
 ),
 g AS (
     SELECT code, notice_date, value FROM (
-        SELECT code, notice_eff AS notice_date, value,
+        SELECT code, pub_eff AS notice_date, value,
                ROW_NUMBER() OVER (
-                 PARTITION BY code, notice_eff
+                 PARTITION BY code, pub_eff
                  ORDER BY report_period DESC) AS rk
         FROM acc
     ) WHERE rk = 1 AND value IS NOT NULL
@@ -306,6 +313,8 @@ class SueI(Factor):
                    "旧信号衰减；依赖 sue/sue_pred 事件层与 perf_forecast")
     category = "surprise"
     freq = "daily"
+    economic_rationale = ("behavioral：盈余公告后漂移 PEAD——投资者对财报/预告"
+                          "信息反应不足（Ball-Brown 1968； Bernard-Thomas 1989）")
 
     _window = 90  # 线性衰减窗口（交易日近似日历日，衰减因子单调即可）
 

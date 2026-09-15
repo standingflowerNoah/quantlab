@@ -34,12 +34,14 @@ from ..data.store import Store
 log = get_logger(__name__)
 
 AUDIT_DIR = Path("data/lake/factor_audit")
-AUDIT_VERSION = "1.0"          # 构造/审查逻辑变更时 bump，旧记录视为失效
+AUDIT_VERSION = "1.1"          # 构造/审查逻辑变更时 bump，旧记录视为失效
+                               # 1.1：as-of 引用升级硬闸门 FAIL +
+                               #      df_full 与截断环境同步重算（消时序假阳性）
 IC_CACHE_CSV = Path("reports/alpha191_ic.csv")
 
 # ── PIT 截断规则：表名 → 截断方式 ────────────────────────────────────
 # LE：date <= t0（t0 收盘后可得的数据）
-_PIT_LE = {"kline_daily", "index_kline", "daily_snapshot"}
+_PIT_LE = {"kline_daily", "index_kline", "daily_snapshot", "share_capital_daily"}
 # LT：date < t0（盘后披露的事件数据，t0 当日事件只能记到 t0+1）
 _PIT_LT = {"dragon_tiger", "block_trade", "lockup", "margin_total",
            "northbound_daily", "hot_topic", "fund_flow_daily"}
@@ -49,7 +51,38 @@ _PIT_NOTICE = {"finance_history"}
 # lockup：解禁日期事前公告（t 日已知未来 60 日计划），属合法前瞻，全量保留
 _PIT_KEEP = {"trade_calendar", "finance_snapshot", "instruments", "index_members",
              "lockup"}
+# as-of 表：只有**引用其股本/状态列**才算缺口（2026-09-11 起按列判定）
+# 背景：op_margin 只用 operating_profit/revenue，却因表名被判 as-of —— 假阳性。
 _ASO_TABLES = {"finance_snapshot", "instruments", "index_members"}
+# 股本列（as-of 的实质风险只在这几列上）
+_ASO_COLS = {"total_shares", "float_shares", "total_share", "float_share"}
+# instruments 的状态列（is_st / industry 用于历史筛选 = 前视）
+_ASO_STATE_COLS = {"is_st", "industry"}
+
+
+def _asof_caveat(cands: set[str], sql: str) -> list[str]:
+    """按**列**判定 as-of 缺口：引用 as-of 表 且 引用了股本/状态列。
+
+    表名判定会误伤「只用财报科目」的因子（如 op_margin）。真正的 as-of
+    风险是「用当前股本/当前 ST 状态回填历史」，故必须列命中。
+    """
+    tabs = sorted(cands & _ASO_TABLES)
+    if not tabs:
+        return []
+    body = _strip_strings(sql).lower()
+    if any(c in body for c in _ASO_COLS):
+        return tabs
+    if any(c in body for c in _ASO_STATE_COLS) and "instruments" in tabs:
+        return tabs
+    return []
+
+
+def _strip_strings(sql: str) -> str:
+    """去掉字符串字面量与注释，避免把 '2026-09-11' 之类误当列名"""
+    s = re.sub(r"--[^\n]*", " ", sql)
+    s = re.sub(r"/\*.*?\*/", " ", s, flags=re.S)
+    s = re.sub(r"'(?:[^']|'')*'", " ", s)
+    return s
 
 
 # ── 1~3：结构 / 分布 / 覆盖 ─────────────────────────────────────────
@@ -92,7 +125,24 @@ def coverage_audit(df: pd.DataFrame) -> dict:
 
 # ── 4：IC 审查 ──────────────────────────────────────────────────────
 def ic_audit(name: str) -> dict:
-    """IC 检验（深审查时全量重算；alpha191 复用批量 IC 结果避免重复计算）"""
+    """IC 检验 v2：Pearson + Rank 双类型 × h=1/5/20（快路径 SQL 单查询）；
+    legacy 键 ic5/icir5/win5/ic20/icir20 = rank 值（向后兼容 FDR/batch 读取）"""
+    try:
+        from .quality import factor_ic_extended
+        ext = factor_ic_extended(name, horizons=(1, 5, 20))
+        if ext is not None and ext.get("rank_ic5") is not None:
+            out = dict(ext)
+            out.update({
+                "ic5": ext["rank_ic5"], "icir5": ext["rank_icir5"],
+                "win5": ext["rank_win5"],
+                "ic20": ext["rank_ic20"], "icir20": ext["rank_icir20"],
+                "direction": 1 if ext["rank_ic5"] > 0 else -1,
+                "source": "computed_v2",
+            })
+            return out
+    except Exception as e:
+        log.warning(f"{name} 双类型 IC 快路径失败，回退旧路径：{e}")
+    # 旧路径兜底（rank only；alpha191 复用批量 IC 缓存避免重复计算）
     try:
         if re.fullmatch(r"alpha\d{3}", name) and IC_CACHE_CSV.exists():
             cache = pd.read_csv(IC_CACHE_CSV)
@@ -140,18 +190,90 @@ def _rewrite_sql(sql: str, schema: str, tables: set[str]) -> str:
     return re.sub(r"(FROM|JOIN)\s+([a-zA-Z_]\w*)", repl, sql, flags=re.I)
 
 
+# PIT 截断环境的复用缓存：同一 t0 下多个因子共享已物化的截断表。
+# 2026-09-11 引入 share_capital_daily（1600 万行）后，若每个因子/每个 t0 都重建，
+# 单次全审从分钟级劣化到 10 分钟级。t0 相同的连续调用直接复用。
+_CUT_STATE: dict = {"t0": None, "tables": set()}
+
+# ── parquet 直读数据集的截断支持（2026-09-12）────────────────────────
+# 背景：105 个 registry 因子里有 20 个用 read_parquet('...') 直读湖文件
+# （valuation_daily / finance_q/*），SQL 中不含表名 → 旧实现直接 return None，
+# 而 pit_audit 末尾又把 SKIP 覆盖成 PASS → **20 个因子长期处于「假 PASS」**。
+# 现改为：把 read_parquet 调用物化成 audit_mem 下的截断副本再重写。
+_PQ_RE = re.compile(r"read_parquet\(\s*'([^']+)'((?:\s*,\s*[^)]*)?)\)", re.I)
+# 时间列优先级：先看逐日 date，再看财报披露日 InfoPublDate / notice_eff
+# 注意拼写是 InfoPublDate（Publ = publish），不是 InfoPubDate
+_PQ_TIME_COLS = ["date", "infopubldate", "notice_eff"]
+# 模糊兜底：列名含这些片段的视为披露日
+_PQ_TIME_FUZZY = ("publdate", "publ_date", "pub_date", "publishdate")
+
+
+def _pq_name(path: str) -> str:
+    """由 parquet 路径派生数据集名（用于 audit_mem 表名）"""
+    parts = path.replace("\\", "/").rstrip("/").split("/")
+    last = parts[-1]
+    if last.endswith(".parquet") and ("*" in last or last.startswith("part-")):
+        name = parts[-2] if len(parts) >= 2 else "pq"
+        if name in ("income", "balance", "cashflow") and len(parts) >= 3:
+            name = f"{parts[-3]}_{name}"          # finance_q/income → finance_q_income
+        return name
+    return last[: -len(".parquet")] if last.endswith(".parquet") else last
+
+
+def _pq_trunc(store: Store, path: str, t0) -> str | None:
+    """返回该 parquet 数据集在 t0 的截断 WHERE 子句；无可用时间列 → None"""
+    try:
+        cols = store.q(
+            f"DESCRIBE SELECT * FROM read_parquet('{path}', union_by_name=true)"
+        )["column_name"].tolist()
+    except Exception:
+        return None
+    low = {c.lower(): c for c in cols}
+    for key in _PQ_TIME_COLS:
+        if key in low:
+            return f" WHERE {low[key]} <= DATE '{t0}'"
+    for c in cols:                    # 模糊兜底（拼写/命名差异）
+        cl = c.lower()
+        if any(f in cl for f in _PQ_TIME_FUZZY):
+            return f" WHERE {c} <= DATE '{t0}'"
+    return None
+
+
 def _build_cut_env(store: Store, sql: str, t0, pit_summary: dict) -> str | None:
     """在内存 schema 中构建 t0 时点的截断数据环境，返回重写后的 SQL"""
     all_real = _real_tables(store)
     cands = {t.lower() for t in re.findall(r"(?:FROM|JOIN)\s+([a-zA-Z_]\w*)", sql, re.I)}
     used = {t for t in cands if t in all_real}
-    if not used:
+    # parquet 直读数据集：{名: ([完整调用文本...], 截断条件)}
+    pq: dict[str, tuple[list[str], str]] = {}
+    for m in _PQ_RE.finditer(sql):
+        name = _pq_name(m.group(1))
+        conds = _pq_trunc(store, m.group(1), t0)
+        if conds is None:
+            return None                     # 有数据集无法截断 → 无法做 PIT 检验
+        slot = pq.setdefault(name, ([], conds))
+        if m.group(0) not in slot[0]:        # 同一数据集可能被引用多次
+            slot[0].append(m.group(0))
+    if not used and not pq:
         return None
-    try:
-        store.con.execute("DETACH audit_mem")
-    except Exception:
-        pass
-    store.con.execute("ATTACH ':memory:' AS audit_mem")
+    t0s = str(pd.Timestamp(t0).date())
+    if _CUT_STATE["t0"] != t0s:                  # 换 t0 → 重建空环境
+        try:
+            store.con.execute("DETACH audit_mem")
+        except Exception:
+            pass
+        store.con.execute("ATTACH ':memory:' AS audit_mem")
+        _CUT_STATE["t0"] = t0s
+        _CUT_STATE["tables"] = set()
+    else:
+        # 复用前核实表确实还在（连接重建等情况下缓存可能失效）
+        try:
+            rows = store.con.execute(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema='audit_mem'").fetchall()
+            _CUT_STATE["tables"] = {r[0].lower() for r in rows}
+        except Exception:
+            _CUT_STATE["tables"] = set()
     for t in sorted(used):
         if t in _PIT_KEEP:
             src = t                                  # 全量复制
@@ -165,11 +287,23 @@ def _build_cut_env(store: Store, sql: str, t0, pit_summary: dict) -> str | None:
             src, conds = t, f" WHERE date < DATE '{t0}'"    # 事件（盘后披露）
         else:
             src, conds = t, ""                       # 无日期列 → 全量
-        store.con.execute(
-            f"CREATE TABLE audit_mem.{t} AS SELECT * FROM {src}{conds}")
-        if conds:
+        if t not in _CUT_STATE["tables"]:            # 同 t0 已物化 → 复用
+            store.con.execute(
+                f"CREATE TABLE audit_mem.{t} AS SELECT * FROM {src}{conds}")
+            _CUT_STATE["tables"].add(t)
+        if conds:                                    # 复用也要登记截断口径
             pit_summary["truncated"][t] = conds.strip()
-    return _rewrite_sql(sql, "audit_mem", used)
+    # parquet 直读数据集：物化截断副本，并把 SQL 里的 read_parquet(...) 换成它
+    sql2 = _rewrite_sql(sql, "audit_mem", used)
+    for name, (calls, conds) in pq.items():
+        if name not in _CUT_STATE["tables"]:
+            store.con.execute(
+                f"CREATE TABLE audit_mem.{name} AS SELECT * FROM {calls[0]}{conds}")
+            _CUT_STATE["tables"].add(name)
+        pit_summary["truncated"][name] = conds.strip()
+        for call in calls:
+            sql2 = sql2.replace(call, f"audit_mem.{name}")
+    return sql2
 
 
 def pit_audit(factor, df_full: pd.DataFrame, n_t0: int = 3) -> dict:
@@ -187,7 +321,7 @@ def pit_audit(factor, df_full: pd.DataFrame, n_t0: int = 3) -> dict:
     sql, params = factor._sql(None, None, None)
     # 引用快照/主表的因子：声明 as-of 缺口（温和的未来数据，非硬穿越）
     cands = {t.lower() for t in re.findall(r"(?:FROM|JOIN)\s+([a-zA-Z_]\w*)", sql, re.I)}
-    out["asof_caveat"] = sorted(cands & _ASO_TABLES)
+    out["asof_caveat"] = _asof_caveat(cands, sql)
 
     dates = sorted(pd.to_datetime(df_full["date"]).unique())
     if len(dates) < 30:
@@ -198,12 +332,21 @@ def pit_audit(factor, df_full: pd.DataFrame, n_t0: int = 3) -> dict:
     out["t0s"] = [str(t.date()) for t in t0s]
 
     total_diff = 0
+    n_tested = 0
+    max_diff = 0
+    max_diff_ratio = 0.0
+    _pq = "read_parquet" in sql.lower()
     for t0 in t0s:
         cut_sql = _build_cut_env(store, sql, t0.date(), out)
         if cut_sql is None:
-            out["status"] = "SKIP"
-            out["detail"].append(f"t0={t0.date()}: SQL 未引用可截断表")
+            # 2026-09-12 修：此处曾只设 status=SKIP，但被循环末尾的
+            # 「FAIL if total_diff else PASS」无条件覆盖 → 整段跳过仍报 PASS
+            # （ep/bp 等 parquet 直读因子被假 PASS 掩盖）。现改为计数判定。
+            out["detail"].append(
+                f"t0={t0.date()}: SQL 未引用可截断表"
+                + ("（parquet 直读，表名重写不适用）" if _pq else ""))
             continue
+        n_tested += 1
         df_cut = store.q(cut_sql, params)
         a = (df_full[pd.to_datetime(df_full["date"]) == t0]
              .set_index("code")["value"])
@@ -217,6 +360,8 @@ def pit_audit(factor, df_full: pd.DataFrame, n_t0: int = 3) -> dict:
         diff = (va - vb).abs()
         n_diff = int((diff > 1e-9).sum())
         total_diff += n_diff
+        if n_diff > max_diff:
+            max_diff, max_diff_ratio = n_diff, n_diff / max(len(common), 1)
         worst = diff.idxmax() if n_diff else None
         out["detail"].append({
             "t0": str(t0.date()), "n_codes": int(len(common)),
@@ -229,7 +374,12 @@ def pit_audit(factor, df_full: pd.DataFrame, n_t0: int = 3) -> dict:
         except Exception:
             pass
 
-    out["status"] = "FAIL" if total_diff > 0 else "PASS"
+    out["max_diff"] = max_diff
+    out["max_diff_ratio"] = round(max_diff_ratio, 6)
+    if n_tested == 0:
+        out["status"] = "SKIP"          # 一个 t0 都没实际检验 → 不能报 PASS
+    else:
+        out["status"] = "FAIL" if total_diff > 0 else "PASS"
     return out
 
 
@@ -246,7 +396,11 @@ def audit_factor(name: str, factor=None, df: pd.DataFrame | None = None,
         except Exception:
             factor = None
 
-    if df is None:
+    if df is None and factor is not None:
+        # 同步重算：df_full 与 PIT 截断环境同源同刻，消除底层表增量
+        # （如 share_capital_daily 回补）导致的 ASOF 取行错位假阳性
+        df = _recompute_factor(factor)
+    if df is None or df.empty:
         df = _load_factor_values(name)
     if df is None or df.empty:
         rec = {"factor": name, "audit_version": AUDIT_VERSION,
@@ -275,9 +429,20 @@ def audit_factor(name: str, factor=None, df: pd.DataFrame | None = None,
             pit = pit_audit(factor, df)
             checks["pit"] = pit
             if pit["status"] == "FAIL":
-                issues.append("PIT 穿越自检 FAIL：截断重算与全量不一致（使用了未来数据）")
-            elif pit["asof_caveat"]:
-                issues.append(f"as-of 缺口：引用快照类表 {pit['asof_caveat']}（当前快照回填历史）")
+                _n, _r = pit.get("max_diff", 0), pit.get("max_diff_ratio", 0)
+                issues.append(
+                    "PIT 穿越自检 FAIL：截断重算与全量不一致（使用了未来数据）"
+                    f"（最大不一致 {_n} 只 = {_r*100:.3f}% 截面）")
+            elif pit["status"] == "SKIP":
+                # 「未检验」不等于「已通过」——显式记为 WARN，避免静默放过
+                issues.append("PIT 未检验（SQL 未引用可截断表，如 parquet 直读）；"
+                              "该因子 PIT 由数据源逐日性保证，未经审计验证")
+            if pit["asof_caveat"]:
+                # 2026-09-12 硬闸门：as-of 引用（快照表股本/状态列回填历史）
+                # 从 WARN 升级为 FAIL——禁止快照数据进入因子 SQL
+                issues.append(f"as-of 缺口（硬闸门）：引用快照类表 "
+                              f"{pit['asof_caveat']} 的股本/状态列"
+                              "（当前快照回填历史=未来数据，禁入因子 SQL）")
         else:
             checks["pit"] = {"status": "SKIP", "detail": ["非 registry 因子"]}
     else:
@@ -297,9 +462,13 @@ def audit_factor(name: str, factor=None, df: pd.DataFrame | None = None,
                 checks["pit"] = pit_old
                 carried_pit = True
                 if pit_old["status"] == "FAIL":
-                    issues.append("PIT 穿越自检 FAIL：截断重算与全量不一致（复用旧审查）")
-                elif pit_old.get("asof_caveat"):
-                    issues.append(f"as-of 缺口：引用快照类表 {pit_old['asof_caveat']}"
+                    _n, _r = pit_old.get("max_diff", 0), pit_old.get("max_diff_ratio", 0)
+                    issues.append(
+                        "PIT 穿越自检 FAIL：截断重算与全量不一致（复用旧审查）"
+                        f"（最大不一致 {_n} 只 = {_r*100:.3f}% 截面）")
+                if pit_old.get("asof_caveat"):
+                    issues.append(f"as-of 缺口（硬闸门）：引用快照类表 "
+                                  f"{pit_old['asof_caveat']} 的股本/状态列"
                                   "（复用旧审查）")
         if not carried_ic:
             log.warning(f"[audit] {name}: quick 模式且旧记录无 IC，评级将缺失"
@@ -311,6 +480,7 @@ def audit_factor(name: str, factor=None, df: pd.DataFrame | None = None,
         issues.append(f"截面覆盖中位数仅 {checks['coverage']['codes_per_day_median']} 只")
 
     if any("PIT 穿越自检 FAIL" in i for i in issues) or \
+       any("as-of 缺口（硬闸门）" in i for i in issues) or \
        checks["structure"]["dup_date_code_rows"] > 0 or \
        checks["structure"]["inf_values"] > 0:
         verdict = "FAIL"
@@ -364,6 +534,30 @@ def maybe_audit(factor, df: pd.DataFrame) -> dict | None:
     else:
         deep = True                        # 首次构建 → 必须全审
     return audit_factor(factor.name, factor=factor, df=df, deep=deep)
+
+
+def _recompute_factor(factor) -> pd.DataFrame | None:
+    """从当前数据库同步全量重算因子（PIT 审查专用）
+
+    目的：df_full 与截断环境必须来自**同一时刻的同一数据库状态**。
+    若 df_full 读湖 parquet（构建时快照），而底层表在构建后又有增量
+    （如 share_capital_daily 回补历史股本行），ASOF 取行错位会产生
+    n_diff>0 的**假阳性 FAIL**（2026-09-12 size/sp 等 6 因子实测）。
+    重算失败（引擎异常等）时回退湖读取，保持可用性。
+    """
+    try:
+        from ..data.store import Store
+        store = Store()
+        df = factor.compute(store)
+        if df is None or df.empty:
+            return None
+        df = df.copy()
+        df["date"] = pd.to_datetime(df["date"])
+        return df
+    except Exception as e:
+        log.warning(f"[audit] {getattr(factor, 'name', '?')} 同步重算失败，"
+                    f"回退湖读取: {str(e)[:100]}")
+        return None
 
 
 def _load_factor_values(name: str) -> pd.DataFrame | None:

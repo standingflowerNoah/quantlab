@@ -9,6 +9,7 @@
   python scripts/daily_pipeline.py --skip-data     # 跳过数据更新
   python scripts/daily_pipeline.py --skip-quality  # 跳过数据质量体检
 """
+import os
 import sys
 import time
 import argparse
@@ -22,6 +23,48 @@ from quantlab.config import get_logger
 from quantlab.broadcast import broadcast
 
 log = get_logger("pipeline")
+
+# 单实例锁：防多实例并发（DuckDB 单写者互锁 + tushare 限流，双开零收益全损失）
+LOCK_FILE = Path(__file__).resolve().parent.parent / "data" / ".pipeline.lock"
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        h = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if h:
+            k32.CloseHandle(h)
+            return True
+        return False
+    except Exception:
+        return True  # 检测失败保守视为存活：宁可不启动，也不双开
+
+
+def acquire_pipeline_lock() -> bool:
+    try:
+        if LOCK_FILE.exists():
+            try:
+                old_pid = int(LOCK_FILE.read_text().strip())
+            except Exception:
+                old_pid = 0
+            if old_pid and _pid_alive(old_pid):
+                print(f"[lock] 已有 pipeline 实例在运行 (PID {old_pid})，本实例退出", flush=True)
+                return False
+        LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        LOCK_FILE.write_text(str(os.getpid()))
+        return True
+    except Exception as e:
+        print(f"[lock] 锁检测异常({e})，保守退出", flush=True)
+        return False
+
+
+def release_pipeline_lock():
+    try:
+        if LOCK_FILE.exists() and LOCK_FILE.read_text().strip() == str(os.getpid()):
+            LOCK_FILE.unlink()
+    except Exception:
+        pass
 
 STEPS = []
 
@@ -110,7 +153,9 @@ def run_metric_store():
     # + 当日覆盖/分布/换手/暴露）→ L1 滚动缓存全量重建 → L2 核心对追加；
     # 周五附带全库 N×N 相关矩阵。失败不阻塞流水线（次日重算窗口天然补齐）。
     from quantlab.factor.metric_store import update_daily
-    return update_daily()
+    # workers=2：每 worker duckdb 上限 10GB，默认 4 会到 40GB 超 32GB 物理内存
+    # （2026-09-13 全量回填三轮资源调参稳定配置：2w × 4threads × 10GB）
+    return update_daily(workers=2)
 
 
 @step("拥挤度监控")
@@ -316,6 +361,12 @@ def main():
     ap.add_argument("--skip-report", action="store_true")
     args = ap.parse_args()
 
+    if not acquire_pipeline_lock():
+        broadcast("incident", "流水线拒绝启动（单实例锁）", action="warn",
+                  detail="检测到另一 pipeline 实例在运行，本实例自动退出，避免双开互锁",
+                  impact="无（已有实例接管）", source="daily_pipeline")
+        sys.exit(0)
+
     skip = {
         "数据更新": args.skip_data,
         "数据质量": args.skip_quality,
@@ -381,4 +432,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        release_pipeline_lock()

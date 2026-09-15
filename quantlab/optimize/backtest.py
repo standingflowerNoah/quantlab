@@ -56,6 +56,7 @@ def run_optimized_backtest(score: pd.DataFrame, n_stocks: int = 100,
     prev_codes: list[str] = []
     turnover_sum = 0.0
     n_periods = 0
+    tc_list: list[float] = []     # E1 转移系数：逐期 corr(score, 主动权重)
     rows = []
     for i in range(len(rb_dates) - 1):
         d0, d1 = rb_dates[i], rb_dates[i + 1]
@@ -76,6 +77,19 @@ def run_optimized_backtest(score: pd.DataFrame, n_stocks: int = 100,
 
         w = optimize_weights(method, hist.values)
         w = np.asarray(w, dtype=float)
+
+        # E1 转移系数（Grinold-Kahn）：本期截面 corr(score, 主动权重)。
+        # 主动权重 = 持仓权重 − 全池等权基准（未持仓 = −1/N_pool）。
+        # TC 低 = 信号→权重的转移效率被截断/约束吃掉（"IC 好≠组合好"的
+        # 量化分解）。等权基准为近似（真实基准为中证1000 成份权重）。
+        try:
+            sc = s.set_index("code")["score"]
+            w_vec = pd.Series(0.0, index=sc.index)
+            w_vec.loc[usable] = wu
+            active = w_vec - 1.0 / len(sc)
+            tc_list.append(float(sc.corr(active, method="spearman")))
+        except Exception:            # 仪器化失败不影响回测本身
+            log.debug("[backtest] TC 计算失败（忽略）", exc_info=True)
 
         # —— 逐日记账：d0 收盘建仓，持有期内每日盯市 ——
         seg = pmat.loc[d0:d1, valid].ffill()    # 停牌日沿用最后价格
@@ -126,6 +140,8 @@ def run_optimized_backtest(score: pd.DataFrame, n_stocks: int = 100,
         "metrics_bm": performance(curve["nav_bm"], period_days=1),
         "excess": excess_metrics(curve, period_days=1),
         "turnover_avg": round(turnover_sum / max(n_periods, 1), 4),
+        "tc_avg": (round(sum(tc_list) / len(tc_list), 4) if tc_list else None),
+        "tc_n_periods": len(tc_list),
         "method": method, "n_stocks": n_stocks, "lookback": lookback,
         "benchmark": benchmark,
     }

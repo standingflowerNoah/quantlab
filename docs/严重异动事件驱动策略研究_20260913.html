@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page-node-id="wKXkPc8tIJP58J9TCt9wuB">
+<head data-page-node-id="4XOaOIiLXbMxzGkVVDcFsn">
+<meta charset="UTF-8" data-page-node-id="3BGDcyQccQFDhJ8peckV27">
+<meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="RAlPCgu3c5lL6FMVAlwIVW">
+<title>严重异动事件驱动策略研究（2026-09-13）</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #f5f6f8; color: #26282c; font-family: "Microsoft YaHei", "PingFang SC", sans-serif; line-height: 1.7; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 24px 20px 60px; }
+  header { background: linear-gradient(135deg, #1c2b4a 0%, #2d4470 100%); color: #fff; border-radius: 12px; padding: 28px 32px; margin-bottom: 20px; }
+  header h1 { font-size: 24px; font-weight: 600; }
+  header .meta { font-size: 13px; opacity: .85; margin-top: 8px; }
+  .badge { display: inline-block; background: rgba(255,255,255,.16); border-radius: 20px; padding: 2px 12px; font-size: 12px; margin-right: 8px; margin-top: 10px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-bottom: 20px; }
+  .card { background: #fff; border-radius: 10px; padding: 18px 20px; box-shadow: 0 1px 3px rgba(20,30,60,.06); border-top: 3px solid #c9a34e; }
+  .card h3 { font-size: 15px; margin-bottom: 8px; }
+  .card .verdict { font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 4px; color: #fff; display: inline-block; margin-bottom: 8px; }
+  .v-yes { background: #c23531; } .v-no { background: #2f7d4f; } .v-mid { background: #b8860b; }
+  .card p { font-size: 13px; color: #4a4e55; }
+  .card .big { font-size: 22px; font-weight: 700; color: #c23531; margin: 4px 0; }
+  section { background: #fff; border-radius: 10px; padding: 24px 28px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(20,30,60,.06); }
+  section h2 { font-size: 18px; border-left: 4px solid #c9a34e; padding-left: 10px; margin-bottom: 14px; }
+  section h3 { font-size: 15px; margin: 16px 0 8px; color: #1c2b4a; }
+  .chart { width: 100%; height: 360px; }
+  .chart-note { font-size: 12px; color: #8a8f98; margin-top: 4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 10px 0; }
+  th { background: #f0f2f6; padding: 8px 10px; text-align: left; font-weight: 600; white-space: nowrap; }
+  td { padding: 7px 10px; border-bottom: 1px solid #eceef2; }
+  tr:hover td { background: #fafbfd; }
+  .pos { color: #c23531; font-weight: 600; } .neg { color: #2f7d4f; font-weight: 600; }
+  .tag { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 10px; background: #eef1f6; color: #5a6070; margin-right: 6px; }
+  .warn { background: #fdf6e8; border-left: 4px solid #d4a017; padding: 12px 16px; border-radius: 6px; font-size: 13px; margin: 12px 0; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 800px) { .grid2 { grid-template-columns: 1fr; } }
+  footer { font-size: 12px; color: #8a8f98; text-align: center; margin-top: 30px; line-height: 1.8; }
+</style>
+</head>
+<body data-page-node-id="nIRGLuIydOsHzMAao7ZpAL">
+<div class="wrap" data-page-node-id="MxEFf6uddsrJNlInItjkSB">
+
+<header data-page-node-id="iCMFxTjh9JMtrITbCqa1s8">
+  <h1 data-page-node-id="NSxB06vYDdGvDMvY5i0YhH">严重异动事件驱动策略研究</h1>
+  <div class="meta" data-page-node-id="hWXaZ8Wg2lb6Ev0BklyNIu">口径：交易所官方异常波动标准（3日累计偏离 ±20%/±30%）｜数据窗口：2022-01 ~ 2026-09-11｜事件样本：22,593 个（非ST 16,197）</div>
+  <div data-page-node-id="usPXIsk0a0lUDBSEwtJJKb">
+    <span class="badge" data-page-node-id="3BSd37t9GpbCrmHYNCUbob">资金流：全市场分单 moneyflow 571万行（本次回补）</span>
+    <span class="badge" data-page-node-id="NYquM0UVWNr4I5JsXkJJmq">组合层回测：成本后</span>
+    <span class="badge" data-page-node-id="jGFvqpRb94NlqAMUjxoB0a">9 项假设/方向全部裁决</span>
+  </div>
+</header>
+
+<!-- TL;DR -->
+<div class="cards" data-page-node-id="JEFLTamnxjVLJCoYbPSYHQ">
+  <div class="card" data-page-node-id="bCQDE25K79lNQdsuBjGV3U">
+    <h3 data-page-node-id="T70AUSG7NKCtqlGcWj9fjs">思路1：主力进散户出</h3>
+    <span class="verdict v-mid" data-page-node-id="DZHbu51zQPaeu6CGmoFq9j">◐ 截面成立 / 时序未验证</span>
+    <div class="big" data-page-node-id="IPTTLJNxfVoG0OB13XkVkp">+6.20% <span style="font-size:12px;color:#8a8f98;" data-page-node-id="zxPHEK6NOc1wAxzEYVvpaV">10日超额 / 事件t=13.7 → 独立日t=2.3</span></div>
+    <p data-page-node-id="rzeRLj3EMb0ef6rgBs1JpW">组合层年化 +51.1%，但 624 笔信号仅覆盖 <b>57 个独立交易日</b>、50% 信号集中在 2024-02-06 一天——单次危机的截面规律，未过时序验证（§六审计）。</p>
+  </div>
+  <div class="card" data-page-node-id="hCA7fbZnkfhJMkA2Wevz1W">
+    <h3 data-page-node-id="VE8HlMvv9EQi1DQWAZNXge">思路2：高换手大承接</h3>
+    <span class="verdict v-no" data-page-node-id="t1Ezo8yxYmrEBJ3AyQLdol">✗ 证伪且反向</span>
+    <div class="big" style="color:#2f7d4f;" data-page-node-id="lJwAwIDLoFvMZLHFofy8fW">-4.10% <span style="font-size:12px;color:#8a8f98;" data-page-node-id="C8xJdSGUqe68J66LlSKTD5">分年 5/5 全负</span></div>
+    <p data-page-node-id="ViFunCPlX2XfVlsKBp3gCf">两口径一致。高换手+大单净买 = 风险标志，反着用作排除过滤器。</p>
+  </div>
+  <div class="card" data-page-node-id="Z6OLZY6HTnjDo7WlEfxAYv">
+    <h3 data-page-node-id="0HD3pNrys1I9hcY28vs6VQ">UP 隔夜（尾盘买次日卖）</h3>
+    <span class="verdict v-no" data-page-node-id="pH9Uvm274wqMn7ltSIPhZG">✗ 证伪（执行约束）</span>
+    <div class="big" style="color:#2f7d4f;" data-page-node-id="QwUI6yvE2qfXMGmfjV9CO5">-1.98% <span style="font-size:12px;color:#8a8f98;" data-page-node-id="ffvnIwi5uuLiIDPJE5Jg9v">可交易子集隔夜均值</span></div>
+    <p data-page-node-id="f9Y2d8Ax37xufVb3aAW2T2">+1.27% 的隔夜跳空 65.3% 来自 T 日封死涨停（买不到）的票；买得到的次日低开。</p>
+  </div>
+  <div class="card" data-page-node-id="Ue8DlNqGpLyAJFcpVZl7Gn">
+    <h3 data-page-node-id="uKPn6Sq9vQ4S5FQVDsPsI8">危机态识别器（新）</h3>
+    <span class="verdict v-mid" data-page-node-id="EnjhnEBd0Fzrh8qvqFffrm">◐ 有效但限定类型</span>
+    <div class="big" data-page-node-id="mzuRvNBfKy83Z0NHCVxkXz">+5.16% <span style="font-size:12px;color:#8a8f98;" data-page-node-id="7jsowCMp6NWRGfHlujz556">危机态 DOWN 10日超额 / t=17.3</span></div>
+    <p data-page-node-id="kpIn7KE4iKIxIi1GWnbSFh">微盘指数20日回撤≤-10%。S1s×危机态夏普 5.98，但仅覆盖 <b>9 个独立交易日</b>（2024-02 占97%）——单事件截面规律，不上线。</p>
+  </div>
+</div>
+
+<!-- Section 1: 累计超额曲线 -->
+<section data-page-node-id="132EeM0Vdwcg64nQOyuZ1p">
+  <h2 data-page-node-id="gajHdJooCylv08F82o0dvs">一、全景：事件后累计市场调整超额（T+1 开盘入场）</h2>
+  <p style="font-size:13px;color:#4a4e55;" data-page-node-id="OXKma6iyMGxz3daJHIkjuI">xexec_k = T+1 开盘买入持有 k 日收益 − 当日全市场同口径均值。UP 侧全线单调下行（无任何做多窗口）；DOWN 侧深度档 / S1s / D6 在 20~60 日持续走高。</p>
+  <div class="grid2" data-page-node-id="4RG0dVNiPNPvuyEJ1BLlas">
+    <div data-page-node-id="COeeI3vhpB9ihgLS5bb4hX">
+      <div id="chartUp" class="chart" data-page-node-id="qSe9YJ8H5d4d1bWLj4UCKE"></div>
+      <div class="chart-note" data-page-node-id="91wDJ6uAqlDHsqfR4OTkcL">UP（连板急涨）子集：全部负向，追高开最差</div>
+    </div>
+    <div data-page-node-id="1UOMtY54ASQ5JfIonzxxQ6">
+      <div id="chartDn" class="chart" data-page-node-id="NzSfzWdAugC0ANZshNEdIP"></div>
+      <div class="chart-note" data-page-node-id="Qhv41pLQWqyKd0ubo41vKL">DOWN（3日深跌）子集：深度档与信号组持续上行</div>
+    </div>
+  </div>
+</section>
+
+<!-- Section 2: 假设裁决 -->
+<section data-page-node-id="HukaHTE7D7pA2ksdg2Zc0N">
+  <h2 data-page-node-id="4iwwfFpOwkuiOumH8HpiXk">二、两个原始假设的裁决</h2>
+  <table data-page-node-id="QJvWrakRew7t4RoYjlO1yw">
+    <tr data-page-node-id="HQTshC9XeFQZg6AuaYBp9g"><th data-page-node-id="oAhXJtrMPLs6TGBW3NznNa">假设</th><th data-page-node-id="y38xcRUnyKFVnwRfScOG3E">信号定义</th><th data-page-node-id="hmgyufF2vN7qfhPJJHSAqz">事件层（x10）</th><th data-page-node-id="TNOt7eThNot2PJn3DYYTuk">组合层（成本后）</th><th data-page-node-id="jdGWCh42q7KQ34VkeuNrCF">裁决</th></tr>
+    <tr data-page-node-id="No1kkN4j5kHfD2E8XCFX5U">
+      <td data-page-node-id="dmTCJnJXSTLsY8IBZLZhiV">思路1：主力净流入+散户净流出<br data-page-node-id="B69D46iJT9sZogkkGLDpWQ"><span class="tag" data-page-node-id="N9grh77jWBcEQKCSe64Wtx">仅限 DOWN 方向</span></td>
+      <td data-page-node-id="GWyYVEJHWt2dU0D22Gu5dG">main_net_pct≥+5% 且 small_net_pct≤−5%</td>
+      <td class="pos" data-page-node-id="w5AVooROMZNet8qn9KtbME">+6.20%（t=13.7，win 70%，n=623）<br data-page-node-id="E1CPvxgE96zpfzM4eHwob4">五分位单调：Q1 −0.52% → Q5 +5.41%</td>
+      <td class="pos" data-page-node-id="9ZRhfhLwESh9kquaiCKhiW">年化 +51.1% / 夏普 2.33 / 回撤 −38.4%<br data-page-node-id="UF9U9vCbTriHocwDo22O0l">滑点 40bp 仍 +45.2%</td>
+      <td data-page-node-id="Sm2mrfMGEghmsvVkByoKkr"><b data-page-node-id="DLAMlPkwCQNz5NoKDgCvuD">成立</b>；但 92% 信号在 2024（环境依赖）→ 观察名单</td>
+    </tr>
+    <tr data-page-node-id="aYaYh3kh7sQzWcquxiEGob">
+      <td data-page-node-id="N4v155vEeuteJDVr6d1b2g">思路2：高换手+大资金逆势承接</td>
+      <td data-page-node-id="NbhArlsPiOzCD4jdod2LTh">turnover≥20% 且 main_net_pct&gt;0</td>
+      <td class="neg" data-page-node-id="e992NaDguKsm5PtMvUEtaW">−4.10%（t=−8.2），分年 5/5 全负<br data-page-node-id="et4fRoCE4noduXb3QVWDZ8">换手分档单调恶化（&lt;10% 档 +2.69% → 30%+ 档 −3.34%）</td>
+      <td class="neg" data-page-node-id="S717TLNQe2sCyoLdu5RuAQ">事件层即负，无需组合层</td>
+      <td data-page-node-id="HwkZyA7B2sstW2skPjRNXY"><b data-page-node-id="7HYGC5a8I01HDX7pThlVkv">证伪且反向</b> → 回避清单/排除过滤器</td>
+    </tr>
+  </table>
+
+  <h3 data-page-node-id="JknDKyQvUXQozzzD98S32s">UP 侧隔夜策略检验（尾盘买入次日开盘卖）：执行约束决定性证伪</h3>
+  <div id="chartOvernight" class="chart" style="height:320px;" data-page-node-id="mm56WzcNU73kZQEoqXLErK"></div>
+  <div class="chart-note" data-page-node-id="hTU9ZJGX8IBheIn8CWk7BZ">UP 事件隔夜跳空分解：均值 +1.27% 全部由 T 日封死涨停（收盘买不进）的票贡献；可买入子集（T 未封板）平均低开 −1.98%</div>
+  <div class="warn" data-page-node-id="0EIYrwatiQB8HHi0NHFXuG"><b data-page-node-id="J0nyeJBkbm7F87ubrcAJ5I">机制</b>：隔夜溢价属于 T 日盘中打板买入者（板上排队成交）；收盘后的买方只能接手炸板/弱收盘票并承受次日低开（win 仅 26%，2022-2026 分年全负）。盘中封板前买入是另一策略，受排队成交率约束且分钟数据仅 2025 起，本次不可回测。</div>
+</section>
+
+<!-- Section 3: 危机态识别器 -->
+<section data-page-node-id="9HD2ixNPK2v98ShOEEtGEp">
+  <h2 data-page-node-id="u8iL5E4Eb19k8FPdmnnfN5">三、DOWN 侧深挖：市场状态识别器（危机态条件化）</h2>
+  <p style="font-size:13px;color:#4a4e55;" data-page-node-id="wTxbGWMIe36J7TPWOpDvMu"><b data-page-node-id="SZZiiPuWNdjbGNIafpHOR1">识别器</b>：微盘股指数（880003.SH）20 日累计收益 ≤ −10% = 危机态。危机态 DOWN 事件 10 日超额 +5.16%（t=17.3），平常态全部显著为负——单一变量完成环境分层。</p>
+  <div id="chartCrisis" class="chart" data-page-node-id="OWjZ4CsYqc11NjpXoU06D4"></div>
+  <div class="chart-note" data-page-node-id="t7Z2AKZ9wFjlewsVSUhUgl">DOWN 全体与深度档（dev3≤−29%）按市场状态分层的 10 日超额</div>
+
+  <h3 data-page-node-id="OEDKOYNmiy4PIs1ETaSXGb">条件化后的组合层（成本后，持有 10 日）</h3>
+  <div id="chartPort" class="chart" style="height:380px;" data-page-node-id="2xelfsZZARpQKpWcVHbJVJ"></div>
+  <div class="chart-note" data-page-node-id="U3SNk1opfapH77NFfQZ0KF">分年收益：条件化（×危机态）修复了 2024 亏损与 2026 反转问题</div>
+
+  <table data-page-node-id="zgYbtvGU9GUurjk2vDhQbY">
+    <tr data-page-node-id="MUgPMQZmRV1oygeOH7csEZ"><th data-page-node-id="szSUMwH8w4vztugzpMgslD">策略</th><th data-page-node-id="gbl1HzK5DsqoAkg7uHnUy3">n</th><th data-page-node-id="In6NY3iTfEHAmpC0yI3ctI">年化</th><th data-page-node-id="U8J2BKhA9OgtKnf1nu9iBQ">回撤</th><th data-page-node-id="UcPA9v226qYCYmcjxnBMOC">夏普</th><th data-page-node-id="ANE96VKrALldy7WTXmOtAC">分年</th></tr>
+    <tr data-page-node-id="xbDc7PjLOy8R0iGyqvRYTu"><td data-page-node-id="44t6qytcsEDEJXrFw0Aq4C">S1s（无条件）</td><td data-page-node-id="pG87Hi1ChEvz8EroMYa8DW">624</td><td class="pos" data-page-node-id="mHDnAxjmBljNfzMzhixNpr">+51.1%</td><td class="neg" data-page-node-id="RA1qx2dgoeNqBxOC42IjLH">−38.4%</td><td data-page-node-id="nlBQDhP2KifJwsd7knN0h6">2.33</td><td data-page-node-id="yFmRESZrICDQORQOqw7XWa">+25.5 / +36.2 / <b class="neg" data-page-node-id="Hd82nb2aNRnKVySOOBwThD">−8.3</b> / +144.0 / +61.0</td></tr>
+    <tr data-page-node-id="uLlMIVlVRfEXZ4VbpZEYmd"><td data-page-node-id="jRebZ1HsXLEGqfolgDxf11"><b data-page-node-id="9DNOj3iLjXIjnTI9sl6t9y">S1s × 危机态</b></td><td data-page-node-id="vH7bXjd864OCxU6zxXmiFh">565</td><td class="pos" data-page-node-id="D5E49nbcAGSNwd0Ym99VoT">+19.2%</td><td class="neg" data-page-node-id="1hd2KkvPZ9TXZpcW7LxtK3">−11.0%</td><td data-page-node-id="oXVuypBxvJm4FyrzkXDBqY"><b data-page-node-id="7X8Ozbd1Zd4xC9l4KhbF13">5.98</b></td><td data-page-node-id="3XiUKH7IpMjQ80OGauBwh3">+5.6 / — / +47.6 / +11.4 / +22.1（4/4 年正）</td></tr>
+    <tr data-page-node-id="ZuLztL219kxs8v2ph0Bcas"><td data-page-node-id="A0HcJKC0VZYHICuATDpekY">D6（无条件）</td><td data-page-node-id="PhCLEXlwx4EhBvDgRoRoiS">658</td><td class="pos" data-page-node-id="Lhp0IWodhcv1yzcmHMonJZ">+4.4%</td><td class="neg" data-page-node-id="zmmKHIZNSUktUITAJHpA5a">−57.3%</td><td data-page-node-id="WmLBjcMPKQEXOF7hWpmCMK">0.49</td><td data-page-node-id="1svnToE3TMmPeJ0dyqlxEQ">+20.4 / −4.4 / +10.0 / +31.4 / <b class="neg" data-page-node-id="NWFkrRmO38WDXK7Guiv3x1">−27.7</b></td></tr>
+    <tr data-page-node-id="cur1goWCWts1MPJXAc63Ar"><td data-page-node-id="XcFXmphePZdaPdKxUTXGCl"><b data-page-node-id="PWbDTYgSzvKi3oWyzHheEx">D6 × 危机态</b></td><td data-page-node-id="vJHQc0WXz5miee0oxoUrNu">604</td><td class="pos" data-page-node-id="kHtCm3p440qcL5pKhvv2Dp">+21.4%</td><td class="neg" data-page-node-id="kpYbJ3PqMK8RfSN7108ijN">−27.5%</td><td data-page-node-id="DA9FrblrkvrNOKuYxTJOEo">3.42</td><td data-page-node-id="qkjUiDUBOIU0XOnTIi53nl">+32.2 / — / +15.0 / +28.2 / +17.7（4/4 年正）</td></tr>
+  </table>
+
+  <div class="warn" data-page-node-id="zynfSbAdwOHXDazh2k9gye">
+    <b data-page-node-id="E1ap3qsCaxjJ3ull95GtOz">必须披露的三个事实</b>：<br data-page-node-id="NgHIytbdrMNCrzVFP1CONs">
+    ① <b data-page-node-id="Dka45wG6bLwTBQVg3HvE7r">信号集中</b>：S1s×危机态 565 个信号中 558 个（99%）在 2024-02 微盘崩盘月，2022/2025/2026 各仅 1~5 个——非 2024 年份的"分年全正"是噪声级样本；<br data-page-node-id="hBCe5x03fYhEaasjysd6oj">
+    ② <b data-page-node-id="slxWYy8nWjSmfyWjrVKCKb">危机类型区分</b>：识别器捕获的是流动性螺旋型危机（2022-04、2024-02）的 V 型修复；2025-04 关税型反弹弱（危机态内 x10 仅 +0.58%）；2026 型（退市新规下的持续出清）失效（危机态 DOWN 全体 −4.0%）；<br data-page-node-id="NHTLlijc6fLc7vfIv5Qe2m">
+    ③ <b data-page-node-id="LwtmUVCgWpXDONENCTgGfR">性质</b>：极端事件专用、平时空仓——可能数年无信号，触发时集中开仓；下一次危机的类型事先不可知。<b data-page-node-id="YJNcRjCskxnIenbMH8n57n">保留观察，与 S1s 一起进 2026-12 双闸门，不单独上线。</b>
+  </div>
+</section>
+
+<!-- Section 4: D1-D7 -->
+<section data-page-node-id="YdSZjkj7mNBaW3ON6RMD3E">
+  <h2 data-page-node-id="I17FtPsHlUhbD2ceBi7Om9">四、研究方向 D1–D7 裁决总表</h2>
+  <table data-page-node-id="KE5ZoUT87Cp9MfS9f3Frqs">
+    <tr data-page-node-id="BjF7GttwjdPmQeGSN11AyZ"><th data-page-node-id="Rsa6rua0oap1SO8da8EUSu">#</th><th data-page-node-id="H1hH2AAcP16tijRtMawtGH">方向</th><th data-page-node-id="uAXwGFhG1HBc4HD2YJHkf0">事件层证据</th><th data-page-node-id="AtGKq4e53F5UxQNf3jtYyC">裁决</th></tr>
+    <tr data-page-node-id="IaYiWKnziBs4bdmGFau73u"><td data-page-node-id="4By46TgQ0qKJFiKBcvVYli">D1</td><td data-page-node-id="B3fZdZODGvzBwzPfAXFQoQ">异动后 T+1 量比形态</td><td data-page-node-id="BtGvdhjtAVb1JA9BNj0guO">DOWN T+1 放量 1.7-3 倍 +5.23%（t=13.5）最强；UP T+1 巨量 −5.30% 最差</td><td data-page-node-id="tOrg2pXViAd1sRnSIGd0Ot">口径反转第二例（v1"缩量最好"）；信号 92% 在 2024，观察</td></tr>
+    <tr data-page-node-id="rCpa38foHXUIiDN8DH6Ngh"><td data-page-node-id="BMgg5ukdaCWUY9pMJZkngX">D2</td><td data-page-node-id="yeQ3enD2OOnyh0jjraZ7rM">龙虎榜席位结构</td><td data-page-node-id="0fgZN8Ej4Mw9OfqN0D9j0D"><b data-page-node-id="eEjzCDtAThBkoaddUE88wx">拉萨席位净买≥2%：UP −7.01% / DOWN −1.18%，分年 5/5 全负</b>；游资营业部净买 UP −3.58%</td><td data-page-node-id="Ohmt8AljoEmtdhnGSyj8Hr"><b data-page-node-id="bMBI2ZnDl3RMT4sqTMfeoR">唯一跨年稳健信号（负向）→ 回避清单</b></td></tr>
+    <tr data-page-node-id="ERtNACWKYgGoWlYZj6KuBP"><td data-page-node-id="4rtU41GqhWEeBPbazKKcTZ">D3</td><td data-page-node-id="NeqyPRSujzRw9XuVZ1FCLm">连续异动生命周期</td><td data-page-node-id="uajpbPzp7g1T2NOgE9vppq">官方 3 日冷却吸收连板周期（第 3 次及以后样本=0）</td><td data-page-node-id="1xDd6B3KDFKkbOSRvCjLEM">口径发现：v1 streak 风控失去操作对象</td></tr>
+    <tr data-page-node-id="Ihc9cPuZ1D7feEvhrH1voV"><td data-page-node-id="2XDox4ftuBY9O7tNX12LFX">D4</td><td data-page-node-id="N8xDaLZhAg66KEr05UOfii">板块异动密度</td><td data-page-node-id="HqES9N1Gl6cYecwOUsmxhq">板块深跌 +2.63% vs 孤立深跌 −0.80%；UP 孤立异动 −8.26% 最毒</td><td data-page-node-id="hwr4HZLX3CiPnjzVui55ZH">错杀 vs 出清识别组件（PIT 快照 caveat）</td></tr>
+    <tr data-page-node-id="yQVRE2fLkU1KU7kVkoWtWj"><td data-page-node-id="2K9VgytETOrU5lpQCyjhj7">D5</td><td data-page-node-id="4yzbgDcpd30yXJVQDI3NuV">次日跳空结构</td><td data-page-node-id="HN9lRl3xHa8lYaz9IqXIHM">UP 高开&gt;+2% 追买 −4.98%（5/5 年负）；DOWN 高开企稳 +3.29% 但 2026 转负</td><td data-page-node-id="PD2ROZ0hyZKW7vQYTqkxJt">UP 侧禁追高开（稳健）；DOWN 侧环境依赖</td></tr>
+    <tr data-page-node-id="YrIonA65i95iAiclhDdLEN"><td data-page-node-id="DntbFyqhTDBJRhQX20Gqh5">D6</td><td data-page-node-id="hTqstqs83504aupNornBbC">20日天量+主力净流入</td><td data-page-node-id="X3wi9lfnrQOuLz3sUDAUKj">DOWN 天量+主力净买 +7.60%（t=15，win 75%）vs 非天量 +0.14%——天量是 DOWN 最强分层变量</td><td data-page-node-id="4jYqvsEIkoZ1Q4XGA45kpF">组合层仅 +4.4%/夏普 0.49（IC好≠组合好第七证）；<b data-page-node-id="B2QNEa45BHPiWlFOGmW5Sh">×危机态后修复至夏普 3.42</b></td></tr>
+    <tr data-page-node-id="7jk4EOxtCpxrnyt4qfdy8K"><td data-page-node-id="1Jyk6hLL9JF2YW9ZzCu47y">D7</td><td data-page-node-id="Wlabem1EXo8G1hBcX0Oh9X">非天量+主力未流出+价差</td><td data-page-node-id="YR03h00ZAJa2yXJU4SA47x">UP 档（天量后涨&gt;16%）−4.4% 惯性已耗尽；DOWN 档（回落&gt;3%）+2.1%、月度夏普 0.0</td><td data-page-node-id="RkwZ3NuSChAPT2IQbyaKbi">不构成新增独立信号，可作辅助过滤</td></tr>
+  </table>
+  <div class="warn" data-page-node-id="GIc3imd5f3gQoMqJNsOP5p"><b data-page-node-id="0UtwKUSZeVFFV5w6jMsXgf">统一模式</b>：DOWN 侧强信号（S1s/D1/D4/D6）同源——均为 2024 流动性修复红利；UP 侧负向信号（拉萨净买/高开/巨量）跨年稳健。<b data-page-node-id="g02bEdbrWs02jXnyGwfA89">异动研究的可落地产出 = 回避清单（拉萨净买、T+1 高开、孤立 UP、天量 UP），不是买入清单。</b></div>
+</section>
+
+<!-- Section 5: 方法 -->
+<section data-page-node-id="9d8PAkzFEjPUKj0Ibnlisl">
+  <h2 data-page-node-id="uoo1nkjXU7Q9OmCZA8FfZp">五、方法与口径（摘要）</h2>
+  <table data-page-node-id="YGWWDRMtqxOaU4EeYFWkKH">
+    <tr data-page-node-id="QKf0w70v3H10h3HaE1ttPX"><th data-page-node-id="T3Cr1c7ZcXcH7DEgSb09ID">项</th><th data-page-node-id="RXgRAE02NPoBSzFiAJF5KP">口径</th></tr>
+    <tr data-page-node-id="LiYITeSHxxAm65SaLhHQBK"><td data-page-node-id="69H4Si1vdFvbhTCRsy7cOf">事件定义</td><td data-page-node-id="3upkJrvwouwKcuwJCcGmaW">交易所官方异常波动标准：连续 3 日收盘价涨跌幅偏离值累计 ±20%（主板）/±30%（创业/科创）；3 日滚动+触发后 3 日冷却；基准=上证/深成/创业板指/科创50；剔北交所、ST、上市&lt;60日。与龙虎榜官方条目交叉验证非 ST 档召回 73.9%</td></tr>
+    <tr data-page-node-id="r6eUSbeanA6jcw1pMSTWUv"><td data-page-node-id="DikK4WuKQVGnYVeosLhvtA">收益口径</td><td data-page-node-id="ROmzrHuAjAeKzvdymwrnV0">exec_k = T+1 开盘买入 → T+k 收盘卖出（复权）；xexec_k = exec_k − 当日全市场截面同口径均值；T+1 一字涨停开盘剔除（UP 6.1%）</td></tr>
+    <tr data-page-node-id="NJwAHf7NFwtTJKKFKXq5rK"><td data-page-node-id="uMl6DxExnKFtgfGWICAnSa">资金流</td><td data-page-node-id="3D4wCgasld410JLddIucC3">xiaodefa tushare 代理 moneyflow（本次回补 2022-2026 全市场 571 万行）；主力=特大+大单；占比=净额×1e4/成交额；与东财探针交叉验证方向一致率 86.7%</td></tr>
+    <tr data-page-node-id="Qp0HRouLJIZEGA7lgRNP1j"><td data-page-node-id="UtjcyHuv56PR848WJGNzp8">组合层</td><td data-page-node-id="zDCiFYgLBjyWGmERZrTvI2">日历等权组合；成本=佣金 2.5bp×2+印花 5bp+滑点 20bp/边；持有 10 日；危机态条件=微盘指数 880003.SH 20日收益≤−10%</td></tr>
+  </table>
+  <p style="font-size:12px;color:#8a8f98;margin-top:10px;" data-page-node-id="zcO1tkI40bDMHqh4UlSB8j">详细数据工程记录、v1 单日口径对照、失效风险分析见 Markdown 版：research/严重异动事件驱动策略研究_20260913.md</p>
+</section>
+
+
+<!-- Section 6: 信号时间集中度审计 -->
+<section data-page-node-id="audit001">
+  <h2>六、信号时间集中度审计（2026-09-14 终审）</h2>
+  <p style="font-size:13px;color:#4a4e55;">检验"信号是否集中在历史上少数日子"。以<b>独立信号日</b>为统计单位（同日信号截面高度相关不能当独立样本）复核全部 t 值。</p>
+  <table>
+    <tr><th>信号集</th><th>笔数</th><th>独立信号日</th><th>占窗口</th><th>Top1日</th><th>Top5日</th><th>50%信号集中于</th><th>事件 t</th><th>独立日 t</th></tr>
+    <tr><td>S1s 无条件</td><td>624</td><td><b>57</b></td><td>5.3%</td><td class="neg">53%</td><td class="neg">90%</td><td><b>1 天</b></td><td>13.7</td><td class="neg">2.3</td></tr>
+    <tr><td>S1s × 危机态</td><td>565</td><td><b>9</b></td><td>0.8%</td><td class="neg">58%</td><td class="neg">99%</td><td>1 天</td><td>14.5</td><td class="neg">2.3 (n=9)</td></tr>
+    <tr><td>D6 天量+主力净买</td><td>658</td><td>61</td><td>5.7%</td><td class="neg">56%</td><td class="neg">90%</td><td>1 天</td><td>15.0</td><td class="neg">0.2</td></tr>
+    <tr><td>D6 × 危机态</td><td>604</td><td>15</td><td>1.4%</td><td class="neg">61%</td><td class="neg">98%</td><td>1 天</td><td>16.3</td><td>1.7</td></tr>
+    <tr><td>DOWN 全体（对照）</td><td>4,455</td><td>770</td><td>71.6%</td><td>16%</td><td>36%</td><td>33 天</td><td>7.6</td><td class="neg">-3.3</td></tr>
+    <tr><td>UP 全体（对照）</td><td>11,025</td><td><b>1,073</b></td><td>99.8%</td><td>1%</td><td>4%</td><td>267 天</td><td>-20.0</td><td class="pos">-13.6</td></tr>
+  </table>
+  <div class="warn">
+    <b>终审结论</b>：<br>
+    ① 正向信号（S1s/D6 及其危机态组合）<b>未过时序验证</b>——事件口径 t=13.7~16.3 的显著性主要来自同日截面相关；独立日口径下 S1s 边缘（t=2.3）、D6 归零（t=0.2）。本质是 2024-02 微盘崩盘<b>单一次历史事件</b>的截面规律；<br>
+    ② 真正时序稳健的是<b>负向信号</b>：UP 全体负超额覆盖 99.8% 交易日（独立日 t=-13.6）；DOWN 全体剔除危机日后实为负（t=-3.3）——"平时买异动股都是错的"；<br>
+    ③ 方法论硬门槛（新增）：事件驱动结论进候选池前，<b>独立信号日 ≥30 且独立日 t ≥2</b>。<br>
+    <b>裁决更新：S1s/D6×危机态 不构成可上线策略。保留：回避清单 + "危机中强承接股修复更快"假说登记（等下一次流动性危机做样本外检验）。</b>
+  </div>
+</section>
+
+<footer data-page-node-id="SsHARLh0XMPCyE4WylZmY3">
+  数据来源：主库日线/龙虎榜（fsdb、东财）、xiaodefa tushare 代理（moneyflow、stk_high_shock）、微盘股指数 880003.SH｜数据截至 2026-09-11<br data-page-node-id="bPmMPhqDb3YEyukpzWFx6F">
+  本报告基于公开数据和量化分析，仅供参考，不构成投资建议。市场有风险，投资需谨慎。过往表现不预示未来收益。
+</footer>
+
+</div>
+
+<script>
+var K = ['1日','2日','3日','5日','10日','20日','60日'];
+
+// 图1：UP 累计超额
+var c1 = echarts.init(document.getElementById('chartUp'));
+c1.setOption({
+  tooltip: { trigger: 'axis' },
+  legend: { data: ['UP全体','UP天量','UP高开追买(>+2%)'] },
+  xAxis: { type: 'category', data: K },
+  yAxis: { type: 'value', name: '累计超额%' },
+  series: [
+    { name: 'UP全体', type: 'line', data: [-0.33,-0.84,-1.46,-2.47,-3.64,-5.44,-8.93], itemStyle:{color:'#c23531'} },
+    { name: 'UP天量', type: 'line', data: [0.16,-0.57,-1.18,-2.25,-3.37,-5.12,-7.83], itemStyle:{color:'#e08a3c'} },
+    { name: 'UP高开追买(>+2%)', type: 'line', data: [-1.88,-1.82,-2.57,-3.61,-4.99,-7.10,-11.81], itemStyle:{color:'#7b4fa6'} }
+  ]
+});
+
+// 图2：DOWN 累计超额
+var c2 = echarts.init(document.getElementById('chartDn'));
+c2.setOption({
+  tooltip: { trigger: 'axis' },
+  legend: { data: ['DOWN全体','深度档(dev3≤-29%)','S1s强承接','D6天量+主力净买'] },
+  xAxis: { type: 'category', data: K },
+  yAxis: { type: 'value', name: '累计超额%' },
+  series: [
+    { name: 'DOWN全体', type: 'line', data: [-0.33,-0.14,0.42,1.35,1.53,3.07,1.41], itemStyle:{color:'#8a8f98'} },
+    { name: '深度档(dev3≤-29%)', type: 'line', data: [0.18,1.75,3.12,5.55,7.28,10.56,11.91], itemStyle:{color:'#c23531'} },
+    { name: 'S1s强承接', type: 'line', data: [-2.07,-0.22,1.54,4.69,6.20,8.73,13.34], itemStyle:{color:'#2d4470'} },
+    { name: 'D6天量+主力净买', type: 'line', data: [-2.40,-0.32,2.10,5.20,7.60,10.76,11.98], itemStyle:{color:'#d4a017'} }
+  ]
+});
+
+// 图3：UP 隔夜分解
+var c3 = echarts.init(document.getElementById('chartOvernight'));
+c3.setOption({
+  tooltip: { trigger: 'axis' },
+  xAxis: { type: 'category', data: ['UP全体隔夜均值','T+1一字板组\n(T日封死涨停,买不到)','可买入子集\n(T未封板)','DOWN全体(对照)'] },
+  yAxis: { type: 'value', name: '隔夜跳空%' },
+  series: [{
+    type: 'bar',
+    barWidth: '55%',
+    data: [
+      { value: 1.27, itemStyle: { color: '#c23531' } },
+      { value: 10.54, itemStyle: { color: '#b8b8b8' } },
+      { value: -1.98, itemStyle: { color: '#2f7d4f' } },
+      { value: -0.89, itemStyle: { color: '#2f7d4f' } }
+    ],
+    label: { show: true, position: 'outside', formatter: '{c}%' }
+  }]
+});
+
+// 图4：危机态分层
+var c4 = echarts.init(document.getElementById('chartCrisis'));
+c4.setOption({
+  tooltip: { trigger: 'axis' },
+  legend: { data: ['DOWN全体','深度档(dev3≤-29%)'] },
+  xAxis: { type: 'category', data: ['危机态(微盘20日≤-10%)','弱(-10~-3%)','平(±3%)','强(>+3%)'] },
+  yAxis: { type: 'value', name: '10日超额%' },
+  series: [
+    { name: 'DOWN全体', type: 'bar', data: [5.16,-1.57,-2.41,-0.78], itemStyle:{color:'#2d4470'},
+      label: { show: true, position: 'outside', formatter: '{c}%' } },
+    { name: '深度档(dev3≤-29%)', type: 'bar', data: [12.37,-1.23,-2.51,null], itemStyle:{color:'#c23531'},
+      label: { show: true, position: 'outside', formatter: '{c}%' } }
+  ]
+});
+
+// 图5：组合层分年
+var c5 = echarts.init(document.getElementById('chartPort'));
+c5.setOption({
+  tooltip: { trigger: 'axis' },
+  legend: { data: ['S1s 无条件','S1s×危机态','D6 无条件','D6×危机态'] },
+  xAxis: { type: 'category', data: ['2022','2023','2024','2025','2026'] },
+  yAxis: { type: 'value', name: '年度收益%' },
+  series: [
+    { name: 'S1s 无条件', type: 'bar', data: [25.5,36.2,-8.3,144.0,61.0], itemStyle:{color:'#e8b4b2'} },
+    { name: 'S1s×危机态', type: 'bar', data: [5.6,null,47.6,11.4,22.1], itemStyle:{color:'#c23531'} },
+    { name: 'D6 无条件', type: 'bar', data: [20.4,-4.4,10.0,31.4,-27.7], itemStyle:{color:'#b6c8b8'} },
+    { name: 'D6×危机态', type: 'bar', data: [32.2,null,15.0,28.2,17.7], itemStyle:{color:'#2f7d4f'} }
+  ]
+});
+
+window.addEventListener('resize', function() {
+  c1.resize(); c2.resize(); c3.resize(); c4.resize(); c5.resize();
+});
+</script>
+</body>
+</html>

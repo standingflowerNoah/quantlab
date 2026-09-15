@@ -35,15 +35,25 @@ from quantlab.factor.metric_store import (
 def factor_names(args) -> list[str]:
     if args.names:
         return [s.strip() for s in args.names.split(",") if s.strip()]
-    return sorted(d.name for d in FACTOR_DIR.iterdir() if d.is_dir())
+    # 只收有年份分片 parquet 的目录——湖里有遗留杂项目录
+    # （如 overnight/，内含 composite_score 等子目录，非因子分片），
+    # 交给 worker 会 FileNotFoundError 崩整批（2026-09-13 实录）。
+    return sorted(
+        d.name for d in FACTOR_DIR.iterdir()
+        if d.is_dir() and list(d.glob("part-*.parquet")))
 
 
 def _done_factors(pool: str, end: str) -> set[str]:
-    """批量断点扫描（单查询，勿逐因子扫 parquet——312×2 次全文件
+    """批量断点扫描（单查询，勿逐因子扫 L0 parquet——312×2 次全文件
     读取会把主进程卡 10 分钟+）。
 
-    L0 与（全市场池的）L2 核心对都齐才算完成；corr 攒批在主进程
-    内存，kill 会丢——丢 corr 的因子必须重跑补齐。
+    完成判据（2026-09-13 修正）：L0 max >= min(end, 该因子**自身湖**max)
+    且 corr 在库。此前用全局 end 判据，湖新鲜度混合时（alpha 族止
+    09-04、size 族止 09-10）把湖数据偏旧的因子误判为未完成，整批
+    无效重算 ~2 小时。每因子湖 max 只读其最新分片单文件（~0.1s）。
+
+    L2 核心对都齐才算完成；corr 攒批在主进程内存，kill 会丢——
+    丢 corr 的因子必须重跑补齐，故 corr 缺失时不算完成。
     """
     import duckdb
     d = POOL_DIR / pool
@@ -55,7 +65,30 @@ def _done_factors(pool: str, end: str) -> set[str]:
             f"SELECT factor, max(date) AS d FROM read_parquet("
             f"'{d.as_posix()}/part-*.parquet', hive_partitioning=false) "
             f"GROUP BY factor").df()
-        done = set(l0[l0["d"].astype(str).str[:10] >= end[:10]]["factor"])
+        if l0.empty:
+            return set()
+        lake_max: dict[str, str] = {}
+        for fd in FACTOR_DIR.iterdir():
+            if not fd.is_dir():
+                continue
+            parts = sorted(fd.glob("part-*.parquet"))
+            if not parts:
+                continue
+            try:
+                m = con.execute(
+                    f"SELECT max(date) FROM read_parquet("
+                    f"'{parts[-1].as_posix()}')").fetchone()[0]
+                if m is not None:
+                    lake_max[fd.name] = str(m)[:10]
+            except Exception:
+                continue
+        done = set()
+        for _, row in l0.iterrows():
+            lm = lake_max.get(row["factor"])
+            if lm is None:
+                continue
+            if str(row["d"])[:10] >= min(end[:10], lm):
+                done.add(row["factor"])
         if done and pool == "ashare_ex":
             corr_f = con.execute(
                 "SELECT DISTINCT factor FROM read_parquet("
@@ -133,7 +166,7 @@ def main() -> None:
             args.workers,
             initializer=_worker_init_proxy,
             initargs=(args.start, str(args.end)[:10])) as pool:
-        for i, (name, l0, cc) in enumerate(
+        for i, (name, _wp, l0, cc) in enumerate(
                 pool.imap_unordered(_job, jobs), 1):
             try:
                 if not l0.empty:

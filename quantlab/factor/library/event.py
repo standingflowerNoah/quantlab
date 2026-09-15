@@ -114,8 +114,9 @@ class DragonNet20(SqlFactor):
                    COALESCE(h.net20 / 1e4, 0)
                    / NULLIF(f.float_shares * k.close / 1e8, 0) AS value
             FROM kline_daily k
+            ASOF JOIN share_capital_daily f
+              ON f.code = k.code AND k.date >= f.date
             LEFT JOIN hit h ON h.date = k.date AND h.code = k.code
-            JOIN finance_snapshot f ON f.code = k.code
             WHERE k.close > 0 AND f.float_shares > 0 {usql}
         ),
         {SHIFT_NEXT_D}
@@ -151,8 +152,9 @@ class LockupPressure60(SqlFactor):
         SELECT k.date, k.code,
                COALESCE(h.lk, 0) * 1e8 / NULLIF(f.float_shares, 0) AS value
         FROM kline_daily k
+        ASOF JOIN share_capital_daily f
+          ON f.code = k.code AND k.date >= f.date
         LEFT JOIN hit h ON h.date = k.date AND h.code = k.code
-        JOIN finance_snapshot f ON f.code = k.code
         WHERE k.close > 0 AND f.float_shares > 0 {usql}
         """
         return sql, uparams
